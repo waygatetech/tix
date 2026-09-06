@@ -102,9 +102,19 @@ else
   exit 1
 fi
 check "init-agent is idempotent" "unchanged $tmp/AGENTS.md" "$tmp/tix" init-agent acme
-grep -qF "claim-next --project acme --json --compact" AGENTS.md
-grep -qF "# Existing" AGENTS.md
-grep -qF "TIX_DB=.tix/tix.db tix" CLAUDE.md
+for pair in "claim-next --project acme --json --compact:AGENTS.md" "# Existing:AGENTS.md" "TIX_DB=.tix/tix.db tix:CLAUDE.md"; do
+  needle="${pair%%:*}"
+  file="${pair##*:}"
+  if grep -qF -- "$needle" "$file"; then
+    echo "ok: $file contains '$needle'"
+    pass=$((pass + 1))
+  else
+    echo "FAIL: $file missing '$needle'" >&2
+    echo "  --- $file contents ---" >&2
+    cat "$file" >&2
+    exit 1
+  fi
+done
 popd >/dev/null
 
 mkdir -p "$tmp/git-project/nested"

@@ -68,7 +68,7 @@ func tixWorkflowSection(project, dbPath string) string {
 	return fmt.Sprintf(`%s
 ## Tix Workflow
 
-Use `+"`tix`"+`.
+Use `+"`TIX_DB=%s tix`"+`.
 
 - Start work with `+"`tix claim-next --project %s --json --compact --fields id,title,body`"+`.
 - Fetch full details only when needed with `+"`tix show ID --json --compact`"+`.
@@ -77,7 +77,7 @@ Use `+"`tix`"+`.
 - After verification, close work with `+"`tix done ID`"+`.
 
 %s
-`, tixWorkflowStart, project, project, project, tixWorkflowEnd)
+`, tixWorkflowStart, dbPath, project, project, project, tixWorkflowEnd)
 }
 
 func appendTixWorkflow(path, section string) (string, error) {
