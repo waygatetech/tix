@@ -6,6 +6,20 @@ No server, no account, no config file — just a single binary and a SQLite file
 
 ## Install
 
+### Prebuilt binary (no Go required)
+
+Download the archive for your platform from the [latest release](https://github.com/waygatetech/tix/releases/latest), extract it, and put the `tix` binary on your `PATH`, e.g.:
+
+```sh
+# macOS (Apple Silicon) example — swap in the archive for your OS/arch
+curl -sL https://github.com/waygatetech/tix/releases/latest/download/tix_darwin_arm64.tar.gz | tar xz
+sudo mv tix /usr/local/bin/
+```
+
+Binaries are published for macOS, Linux, and Windows (amd64 and arm64).
+
+### With Go
+
 Requires [Go](https://go.dev/dl/) 1.25+.
 
 ```sh
@@ -94,6 +108,15 @@ go build ./...      # verify everything compiles
 ```
 
 Contributions are welcome — keep changes small and focused, and follow standard `gofmt` formatting.
+
+### Cutting a release
+
+Pushing a version tag builds and publishes binaries automatically via [GoReleaser](https://goreleaser.com) and GitHub Actions:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
 
 ## License
 
