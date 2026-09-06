@@ -1,5 +1,10 @@
 # tix
 
+[![test](https://github.com/waygatetech/tix/actions/workflows/test.yml/badge.svg)](https://github.com/waygatetech/tix/actions/workflows/test.yml)
+[![release](https://img.shields.io/github/v/release/waygatetech/tix)](https://github.com/waygatetech/tix/releases/latest)
+[![go.mod](https://img.shields.io/github/go-mod/go-version/waygatetech/tix)](go.mod)
+[![license](https://img.shields.io/github/license/waygatetech/tix)](LICENSE)
+
 `tix` is a lightweight command-line ticket tracker for solo devs and small teams. It stores tickets in a local SQLite database (`~/.tix/tix.db` by default) and scopes work by project, so one database can track tickets for every project you touch.
 
 No server, no account, no config file — just a single binary and a SQLite file.
