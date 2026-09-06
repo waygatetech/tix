@@ -15,24 +15,22 @@ import (
 var doneCmd = &cobra.Command{
 	Use:   "done",
 	Short: "Mark a ticket as done",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) != 1 {
-			fmt.Println("usage: tix done [id]")
-			return
+			return fmt.Errorf("usage: tix done [id]")
 		}
 
 		id, err := strconv.Atoi(args[0])
 		if err != nil {
-			fmt.Println("invalid id:", args[0])
-			return
+			return fmt.Errorf("invalid id: %s", args[0])
 		}
 
 		err = tix.Done(id)
 		if err != nil {
-			fmt.Println("done failed:", err)
-			return
+			return fmt.Errorf("done failed: %w", err)
 		}
 		fmt.Printf("#%d done\n", id)
+		return nil
 	},
 }
 

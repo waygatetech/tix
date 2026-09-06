@@ -9,9 +9,8 @@ trap 'rm -rf "$tmp" 2>/dev/null || true' EXIT
 # build before overriding HOME so go's cache stays in the real one
 go build -o "$tmp/tix" .
 
-# isolated HOME so the suite never touches a real ~/.tix DB
-export HOME="$tmp/.home"
-mkdir -p "$HOME"
+# isolated database so the suite never touches a real ~/.tix DB
+export TIX_DB="$tmp/tix.db"
 
 pass=0
 check() {
@@ -47,16 +46,89 @@ check_absent() {
   pass=$((pass + 1))
 }
 
+check_status() {
+  local desc="$1" status="$2"
+  shift 2
+  set +e
+  "$@" >/dev/null 2>&1
+  local got=$?
+  set -e
+  if [[ "$got" -eq "$status" ]]; then
+    echo "ok: $desc"
+    pass=$((pass + 1))
+  else
+    echo "FAIL: $desc" >&2
+    echo "  expected status: $status" >&2
+    echo "  got status: $got" >&2
+    exit 1
+  fi
+}
+
 # projects are ad-hoc: no create command, the --project string scopes everything
 check "add ticket (defines project acme)" "#1 [P2] fix login bug" "$tmp/tix" add --project acme "fix login bug" -b "users can't log in"
 check "add high-priority ticket" "#2 [P0] write docs" "$tmp/tix" add --project acme "write docs" -b "README" -p 0
 check "add ticket in a second project" "#3 [P2] refactor parser" "$tmp/tix" add --project zen "refactor parser" -b "split tokens"
+printf "generated body from a file" >"$tmp/body.txt"
+check "add reads body from file" "#4 [P1] file-backed ticket" "$tmp/tix" add --project files "file-backed ticket" --body-file "$tmp/body.txt" -p 1
 
 check "list shows all acme tickets" "write docs" "$tmp/tix" list --project acme
 check "list acme also shows #1" "fix login bug" "$tmp/tix" list --project acme
 check_absent "list acme excludes zen ticket" "refactor parser" "$tmp/tix" list --project acme
+check "list supports JSON output" '"title": "write docs"' "$tmp/tix" list --project acme --json
+check "list supports compact JSON output" '[{"id":2,' "$tmp/tix" list --project acme --json --compact
+check "list filters by status" '"status":"open"' "$tmp/tix" list --project acme --status open --json --compact
+check "list filters by priority" '"priority":0' "$tmp/tix" list --project acme --priority 0 --json --compact
+check "list limits results" '[{"id":2,' "$tmp/tix" list --project acme --limit 1 --json --compact
+check "list supports JSON field selection" '[{"id":2,"title":"write docs"}' "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,title
+check "projects lists acme counts" "acme open=2 total=2" "$tmp/tix" projects
+check "projects lists files counts" "files open=1 total=1" "$tmp/tix" projects
+check "projects lists zen counts" "zen open=1 total=1" "$tmp/tix" projects
+check "projects supports JSON output" '"status_counts": {' "$tmp/tix" projects --json
+check "projects supports compact JSON output" '[{"project":"acme",' "$tmp/tix" projects --json --compact
+check "projects supports JSON field selection" '[{"project":"acme","total":2}' "$tmp/tix" projects --json --compact --fields project,total
+check "best-practices shows agent loop" "claim-next --project NAME --json --compact" "$tmp/tix" best-practices
+check "agent-guide alias works" "Use: TIX_DB=.tix/tix.db tix" "$tmp/tix" agent-guide
+check "best-practices supports compact JSON" '{"use":"TIX_DB=.tix/tix.db tix",' "$tmp/tix" best-practices --json --compact
+check "best-practices supports JSON field selection" '{"use":"TIX_DB=.tix/tix.db tix"}' "$tmp/tix" best-practices --json --compact --fields use
+pushd "$tmp" >/dev/null
+printf "# Existing\n" > AGENTS.md
+init_out=$("$tmp/tix" init-agent acme)
+if grep -qF "updated $tmp/AGENTS.md" <<<"$init_out" && grep -qF "created $tmp/CLAUDE.md" <<<"$init_out"; then
+  echo "ok: init-agent updates AGENTS and creates CLAUDE"
+  pass=$((pass + 1))
+else
+  echo "FAIL: init-agent updates AGENTS and creates CLAUDE" >&2
+  echo "$init_out" >&2
+  exit 1
+fi
+check "init-agent is idempotent" "unchanged $tmp/AGENTS.md" "$tmp/tix" init-agent acme
+grep -qF "claim-next --project acme --json --compact" AGENTS.md
+grep -qF "# Existing" AGENTS.md
+grep -qF "TIX_DB=.tix/tix.db tix" CLAUDE.md
+popd >/dev/null
+
+mkdir -p "$tmp/git-project/nested"
+git -C "$tmp/git-project" init -q
+pushd "$tmp/git-project/nested" >/dev/null
+check "init-agent finds Git repository root" "/git-project/AGENTS.md" "$tmp/tix" init-agent acme
+if [[ -f "$tmp/git-project/CLAUDE.md" && ! -f "$tmp/git-project/nested/CLAUDE.md" ]]; then
+  echo "ok: init-agent writes guidance at Git root"
+  pass=$((pass + 1))
+else
+  echo "FAIL: init-agent writes guidance at Git root" >&2
+  exit 1
+fi
+popd >/dev/null
 
 check "next returns highest priority first" "write docs" "$tmp/tix" next --project acme
+check "next supports JSON output" '"id": 2' "$tmp/tix" next --project acme --json
+check "next supports compact JSON output" '{"id":2,' "$tmp/tix" next --project acme --json --compact
+check "next supports JSON field selection" '{"id":2,"title":"write docs"}' "$tmp/tix" next --project acme --json --compact --fields id,title
+check "show displays full ticket details" "README" "$tmp/tix" show 2
+check "show supports compact JSON output" '{"id":2,' "$tmp/tix" show 2 --json --compact
+check "show supports JSON field selection" '{"id":2,"status":"open"}' "$tmp/tix" show 2 --json --compact --fields id,status
+check "claim-next marks ticket in progress" '"status":"in_progress"' "$tmp/tix" claim-next --project zen --json --compact
+check "claim-next removes claimed ticket from next" "no open tickets" "$tmp/tix" next --project zen
 check "bump #1 to priority 0" "#1 -> P0" "$tmp/tix" bump 1 0
 check "next now returns bumped ticket" "fix login bug" "$tmp/tix" next --project acme
 
@@ -64,15 +136,33 @@ check "rm removes a ticket" "#2 removed" "$tmp/tix" rm 2 --project acme
 check "done marks a ticket" "#1 done" "$tmp/tix" done 1
 check_absent "list excludes done ticket" "#1" "$tmp/tix" list --project acme
 check "list --all shows done ticket" "x #1" "$tmp/tix" list --project acme -a
+check "projects counts done tickets" "acme done=1 total=1" "$tmp/tix" projects
 check "next has no open tickets left" "no open tickets" "$tmp/tix" next --project acme
 
-check "other project is unaffected" "refactor parser" "$tmp/tix" list --project zen
+check "claimed ticket appears with all tickets" "refactor parser" "$tmp/tix" list --project zen --all
 
 # graceful failures
+check_status "init-agent without project exits non-zero" 1 "$tmp/tix" init-agent
 check "list requires --project" 'required flag(s) "project" not set' "$tmp/tix" list
+check_status "list without --project exits non-zero" 1 "$tmp/tix" list
 check "rm requires --project" 'required flag(s) "project" not set' "$tmp/tix" rm 3
+check_status "rm without --project exits non-zero" 1 "$tmp/tix" rm 3
 check "rm requires an id" "ticket id is required" "$tmp/tix" rm --project zen
+check_status "rm without id exits non-zero" 1 "$tmp/tix" rm --project zen
+check "show rejects missing ticket" "no such ticket: 99" "$tmp/tix" show 99
+check_status "show missing ticket exits non-zero" 1 "$tmp/tix" show 99
 check "add requires a title" "ticket title is required" "$tmp/tix" add --project acme
+check_status "add without title exits non-zero" 1 "$tmp/tix" add --project acme
+check "add rejects both body inputs" "use either --body or --body-file" "$tmp/tix" add --project acme "bad body" --body inline --body-file "$tmp/body.txt"
+check_status "add with both body inputs exits non-zero" 1 "$tmp/tix" add --project acme "bad body" --body inline --body-file "$tmp/body.txt"
+check "list rejects invalid priority" "invalid priority" "$tmp/tix" list --project acme --priority nope
+check_status "list with invalid priority exits non-zero" 1 "$tmp/tix" list --project acme --priority nope
+check "list rejects negative limit" "limit must be >= 0" "$tmp/tix" list --project acme --limit -1
+check_status "list with negative limit exits non-zero" 1 "$tmp/tix" list --project acme --limit -1
+check "json fields reject unknown fields" "unknown field: missing" "$tmp/tix" show 1 --json --fields missing
+check_status "json fields with unknown field exits non-zero" 1 "$tmp/tix" show 1 --json --fields missing
+check "next with no open tickets reports error" "no open tickets" "$tmp/tix" next --project acme
+check_status "next with no open tickets exits non-zero" 1 "$tmp/tix" next --project acme
 
 echo
 echo "all $pass checks passed"

@@ -15,25 +15,23 @@ import (
 var bumpCmd = &cobra.Command{
 	Use:   "bump",
 	Short: "Change a ticket's priority",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) != 2 {
-			fmt.Println("usage: tix bump [id] [priority]")
-			return
+			return fmt.Errorf("usage: tix bump [id] [priority]")
 		}
 
 		id, err1 := strconv.Atoi(args[0])
 		priority, err2 := strconv.Atoi(args[1])
 		if err1 != nil || err2 != nil {
-			fmt.Println("usage: tix bump [id] [priority]")
-			return
+			return fmt.Errorf("usage: tix bump [id] [priority]")
 		}
 
 		id, priority, err := tix.Bump(id, priority)
 		if err != nil {
-			fmt.Println("bump failed:", err)
-			return
+			return fmt.Errorf("bump failed: %w", err)
 		}
 		fmt.Printf("#%d -> P%d\n", id, priority)
+		return nil
 	},
 }
 

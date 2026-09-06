@@ -15,23 +15,20 @@ import (
 var rmCmd = &cobra.Command{
 	Use:   "rm",
 	Short: "Remove a ticket from the list",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
-			fmt.Println("error: ticket id is required")
-			fmt.Println("usage: tix rm [id] --project NAME")
-			return
+			return fmt.Errorf("ticket id is required")
 		}
 		id, err := strconv.Atoi(args[0])
 		if err != nil {
-			fmt.Println("error: invalid ticket id:", args[0])
-			return
+			return fmt.Errorf("invalid ticket id: %s", args[0])
 		}
 		err = tix.Remove(id, project)
 		if err != nil {
-			fmt.Println("error removing ticket:", err)
-			return
+			return fmt.Errorf("error removing ticket: %w", err)
 		}
 		fmt.Printf("#%d removed\n", id)
+		return nil
 	},
 }
 

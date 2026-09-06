@@ -14,21 +14,32 @@ import (
 var nextCmd = &cobra.Command{
 	Use:   "next",
 	Short: "Show the next ticket",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if jsonOutput {
+			ticket, err := tix.NextTicket(project)
+			if err != nil {
+				return err
+			}
+			return printJSON(ticket, compactOutput, fieldsOutput)
+		}
+
 		id, title, body, priority, err := tix.Next(project)
 		if err != nil {
-			fmt.Println("no open tickets")
-			return
+			return err
 		}
 		fmt.Printf("#%d [P%d] %s\n", id, priority, title)
 		if body != "" {
 			fmt.Println(body)
 		}
+		return nil
 	},
 }
 
 func init() {
 	nextCmd.Flags().StringVarP(&project, "project", "p", "", "project name")
+	nextCmd.Flags().BoolVar(&jsonOutput, "json", false, "output ticket as JSON")
+	nextCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
+	nextCmd.Flags().StringVar(&fieldsOutput, "fields", "", "comma-separated JSON fields to include")
 	rootCmd.AddCommand(nextCmd)
 
 	// Here you will define your flags and configuration settings.

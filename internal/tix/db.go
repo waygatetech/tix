@@ -10,6 +10,9 @@ import (
 var db *sql.DB
 
 func dbPath() string {
+	if path := os.Getenv("TIX_DB"); path != "" {
+		return path
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".tix", "tix.db")
 }

@@ -3,7 +3,31 @@ package tix
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
+
+type Ticket struct {
+	ID       int    `json:"id"`
+	Title    string `json:"title"`
+	Body     string `json:"body,omitempty"`
+	Status   string `json:"status"`
+	Priority int    `json:"priority"`
+	Project  string `json:"project"`
+}
+
+type ProjectSummary struct {
+	Project      string         `json:"project"`
+	StatusCounts map[string]int `json:"status_counts"`
+	Total        int            `json:"total"`
+}
+
+type ListOptions struct {
+	Project  string
+	ShowAll  bool
+	Status   string
+	Priority *int
+	Limit    int
+}
 
 func Add(title, body string, priority int, project string) (int64, error) {
 
@@ -48,52 +72,171 @@ func Done(id int) error {
 }
 
 func List(project string, showAll bool) []string {
-	query := `SELECT id, title, status, priority FROM tickets WHERE project = ?`
-	if !showAll {
-		query += ` AND status != 'done'`
-	}
-	query += ` ORDER BY priority ASC, order_rank ASC`
-
-	rows, err := db.Query(query, project)
+	tickets, err := ListTickets(ListOptions{Project: project, ShowAll: showAll})
 	if err != nil {
 		fmt.Println("query failed:", err)
 		return []string{}
 	}
-	defer rows.Close()
 
-	if rows.Err() != nil {
-		fmt.Println("query failed:", rows.Err())
-		return []string{}
-	}
-
-	var tickets []string
-	for rows.Next() {
-		var id, priority int
-		var title, status string
-		rows.Scan(&id, &title, &status, &priority)
+	var lines []string
+	for _, ticket := range tickets {
 		marker := ""
-		if status == "done" {
+		if ticket.Status == "done" {
 			marker = "x "
 		}
-		tickets = append(tickets, fmt.Sprintf("%s#%d [P%d] %s", marker, id, priority, title))
+		lines = append(lines, fmt.Sprintf("%s#%d [P%d] %s", marker, ticket.ID, ticket.Priority, ticket.Title))
 	}
-	return tickets
+	return lines
+}
+
+func ListTickets(options ListOptions) ([]Ticket, error) {
+	where := []string{`project = ?`}
+	args := []any{options.Project}
+	if options.Status != "" {
+		where = append(where, `status = ?`)
+		args = append(args, options.Status)
+	} else if !options.ShowAll {
+		where = append(where, `status != 'done'`)
+	}
+	if options.Priority != nil {
+		where = append(where, `priority = ?`)
+		args = append(args, *options.Priority)
+	}
+	query := `SELECT id, title, body, status, priority, project FROM tickets WHERE ` + strings.Join(where, ` AND `) + ` ORDER BY priority ASC, order_rank ASC`
+	if options.Limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, options.Limit)
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tickets := []Ticket{}
+	for rows.Next() {
+		var ticket Ticket
+		if err := rows.Scan(&ticket.ID, &ticket.Title, &ticket.Body, &ticket.Status, &ticket.Priority, &ticket.Project); err != nil {
+			return nil, err
+		}
+		tickets = append(tickets, ticket)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return tickets, nil
 }
 
 func Next(project string) (int, string, string, int, error) {
-	var id, priority int
-	var title, body string
+	ticket, err := NextTicket(project)
+	if err != nil {
+		return 0, "", "", 0, err
+	}
+	return ticket.ID, ticket.Title, ticket.Body, ticket.Priority, nil
+}
+
+func NextTicket(project string) (Ticket, error) {
+	var ticket Ticket
 	err := db.QueryRow(
-		`SELECT id, title, body, priority FROM tickets
-			 WHERE status != 'done'
+		`SELECT id, title, body, status, priority, project FROM tickets
+			 WHERE status = 'open'
 			 AND project = ?
 			 ORDER BY priority ASC, order_rank ASC LIMIT 1`,
 		project,
-	).Scan(&id, &title, &body, &priority)
+	).Scan(&ticket.ID, &ticket.Title, &ticket.Body, &ticket.Status, &ticket.Priority, &ticket.Project)
 	if err != nil {
-		return 0, "", "", 0, errors.New("no open tickets")
+		return Ticket{}, errors.New("no open tickets")
 	}
-	return id, title, body, priority, nil
+	return ticket, nil
+}
+
+func ClaimNext(project string) (Ticket, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return Ticket{}, err
+	}
+	defer tx.Rollback()
+
+	var id int
+	err = tx.QueryRow(
+		`SELECT id FROM tickets
+			 WHERE status = 'open'
+			 AND project = ?
+			 ORDER BY priority ASC, order_rank ASC LIMIT 1`,
+		project,
+	).Scan(&id)
+	if err != nil {
+		return Ticket{}, errors.New("no open tickets")
+	}
+
+	res, err := tx.Exec(`UPDATE tickets SET status = 'in_progress' WHERE id = ? AND status = 'open'`, id)
+	if err != nil {
+		return Ticket{}, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return Ticket{}, errors.New("ticket already claimed")
+	}
+
+	var ticket Ticket
+	err = tx.QueryRow(
+		`SELECT id, title, body, status, priority, project FROM tickets WHERE id = ?`,
+		id,
+	).Scan(&ticket.ID, &ticket.Title, &ticket.Body, &ticket.Status, &ticket.Priority, &ticket.Project)
+	if err != nil {
+		return Ticket{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Ticket{}, err
+	}
+	return ticket, nil
+}
+
+func Show(id int) (Ticket, error) {
+	var ticket Ticket
+	err := db.QueryRow(
+		`SELECT id, title, body, status, priority, project FROM tickets WHERE id = ?`,
+		id,
+	).Scan(&ticket.ID, &ticket.Title, &ticket.Body, &ticket.Status, &ticket.Priority, &ticket.Project)
+	if err != nil {
+		return Ticket{}, fmt.Errorf("no such ticket: %d", id)
+	}
+	return ticket, nil
+}
+
+func Projects() ([]ProjectSummary, error) {
+	rows, err := db.Query(`SELECT project, status, COUNT(*) FROM tickets GROUP BY project, status ORDER BY project ASC, status ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	projects := []ProjectSummary{}
+	indexes := map[string]int{}
+	for rows.Next() {
+		var project, status string
+		var count int
+		if err := rows.Scan(&project, &status, &count); err != nil {
+			return nil, err
+		}
+		index, ok := indexes[project]
+		if !ok {
+			index = len(projects)
+			indexes[project] = index
+			projects = append(projects, ProjectSummary{
+				Project:      project,
+				StatusCounts: map[string]int{},
+			})
+		}
+		projects[index].StatusCounts[status] = count
+		projects[index].Total += count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return projects, nil
 }
 
 func Remove(id int, project string) error {
