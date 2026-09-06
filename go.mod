@@ -1,4 +1,4 @@
-module github.com/brianseitel/tix
+module github.com/waygatetech/tix
 
 go 1.25.0
 

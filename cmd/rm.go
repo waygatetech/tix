@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/brianseitel/tix/internal/tix"
+	"github.com/waygatetech/tix/internal/tix"
 	"github.com/spf13/cobra"
 )
 

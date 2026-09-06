@@ -9,7 +9,7 @@ No server, no account, no config file — just a single binary and a SQLite file
 Requires [Go](https://go.dev/dl/) 1.25+.
 
 ```sh
-go install github.com/brianseitel/tix@latest
+go install github.com/waygatetech/tix@latest
 ```
 
 Make sure `$(go env GOPATH)/bin` is on your `PATH` so the `tix` binary is available in your shell.
@@ -17,7 +17,7 @@ Make sure `$(go env GOPATH)/bin` is on your `PATH` so the `tix` binary is availa
 To build from source instead:
 
 ```sh
-git clone https://github.com/brianseitel/tix.git
+git clone https://github.com/waygatetech/tix.git
 cd tix
 go build .
 ```
