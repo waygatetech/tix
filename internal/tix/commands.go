@@ -206,6 +206,27 @@ func Show(id int) (Ticket, error) {
 	return ticket, nil
 }
 
+func AllTickets() ([]Ticket, error) {
+	rows, err := db.Query(`SELECT id, title, body, status, priority, project FROM tickets ORDER BY project ASC, priority ASC, order_rank ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tickets := []Ticket{}
+	for rows.Next() {
+		var ticket Ticket
+		if err := rows.Scan(&ticket.ID, &ticket.Title, &ticket.Body, &ticket.Status, &ticket.Priority, &ticket.Project); err != nil {
+			return nil, err
+		}
+		tickets = append(tickets, ticket)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return tickets, nil
+}
+
 func Projects() ([]ProjectSummary, error) {
 	rows, err := db.Query(`SELECT project, status, COUNT(*) FROM tickets GROUP BY project, status ORDER BY project ASC, status ASC`)
 	if err != nil {
@@ -237,6 +258,56 @@ func Projects() ([]ProjectSummary, error) {
 		return nil, err
 	}
 	return projects, nil
+}
+
+type EditOptions struct {
+	Title    *string
+	Body     *string
+	Status   *string
+	Priority *int
+	Project  *string
+}
+
+func Edit(id int, options EditOptions) (Ticket, error) {
+	sets := []string{}
+	args := []any{}
+
+	if options.Title != nil {
+		sets = append(sets, `title = ?`)
+		args = append(args, *options.Title)
+	}
+	if options.Body != nil {
+		sets = append(sets, `body = ?`)
+		args = append(args, *options.Body)
+	}
+	if options.Status != nil {
+		sets = append(sets, `status = ?`)
+		args = append(args, *options.Status)
+	}
+	if options.Priority != nil {
+		sets = append(sets, `priority = ?`)
+		args = append(args, *options.Priority)
+	}
+	if options.Project != nil {
+		sets = append(sets, `project = ?`)
+		args = append(args, *options.Project)
+	}
+	if len(sets) == 0 {
+		return Ticket{}, errors.New("no fields to update")
+	}
+
+	args = append(args, id)
+	query := `UPDATE tickets SET ` + strings.Join(sets, `, `) + ` WHERE id = ?`
+	res, err := db.Exec(query, args...)
+	if err != nil {
+		return Ticket{}, errors.New("update failed")
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return Ticket{}, fmt.Errorf("no such ticket: %d", id)
+	}
+
+	return Show(id)
 }
 
 func Remove(id int, project string) error {
