@@ -104,6 +104,8 @@ This is useful for keeping a project-local ticket database checked into a repo, 
 
 `tix` works well as a lightweight task queue for AI coding agents. Run `tix init-agent PROJECT` in a repo to add ready-to-use `tix` guidance to `AGENTS.md`/`CLAUDE.md`, or point an agent at `tix best-practices` for a terse cheat sheet it can follow (claim the next ticket, do the work, mark it done, repeat).
 
+`tix` also ships an MCP server so agents like Claude Desktop can call ticket operations directly as tools instead of shelling out to the CLI — see [mcp/README.md](mcp/README.md).
+
 ## Development
 
 ```sh
