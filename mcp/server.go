@@ -4,6 +4,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/waygatetech/tix/internal/tix"
@@ -16,7 +17,10 @@ import (
 // work, so tix_claim_next, tix_done, and tix_rm stay on the CLI rather than
 // letting a client here close tickets it never worked on.
 func NewServer() *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "tix", Version: "0.1.0"}, nil)
+	server := mcp.NewServer(
+		&mcp.Implementation{Name: "tix", Version: "0.1.0"},
+		&mcp.ServerOptions{Instructions: instructions()},
+	)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "tix_add",
@@ -53,6 +57,42 @@ func NewServer() *mcp.Server {
 	}, projectsTool)
 
 	return server
+}
+
+// projectRule is the half of the instructions that does not depend on which
+// projects exist: a client that picks a name off the list still has to spell it
+// the way the list does, and has one explicit way to add a name to it.
+const projectRule = "Pass one of those names exactly as written. A name that matches none of " +
+	"them is rejected rather than filed somewhere new, so pick from the list " +
+	"instead of inventing a project; call tix_projects if the list looks stale. " +
+	"Work that genuinely belongs to a project nobody has filed yet goes in with " +
+	"create=true on tix_add or tix_add_batch, which registers the name before " +
+	"filing the ticket."
+
+// instructions tells the client which projects it may file against, because
+// nothing else here does: a client that cannot see the list guesses a name, and
+// a guessed name is how one backlog becomes four. The list is read once at
+// startup, so tix_projects stays the way to see projects created since.
+//
+// A database that cannot be read is not worth refusing to start over — the
+// tools still work, so the instructions fall back to naming the tool that
+// answers the same question live.
+func instructions() string {
+	projects, err := tix.ListProjects()
+	if err != nil || len(projects) == 0 {
+		return "tix keeps tickets in project-scoped backlogs, and every tool that " +
+			"takes a project needs the name of one that exists. Call tix_projects " +
+			"for the list. " + projectRule
+	}
+
+	var b strings.Builder
+	b.WriteString("tix keeps tickets in project-scoped backlogs. These projects exist:\n\n")
+	for _, project := range projects {
+		fmt.Fprintf(&b, "- %s\n", project.Name)
+	}
+	b.WriteString("\n")
+	b.WriteString(projectRule)
+	return b.String()
 }
 
 type ticketOut struct {

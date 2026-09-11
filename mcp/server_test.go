@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/waygatetech/tix/internal/tix"
 	_ "modernc.org/sqlite"
 )
@@ -20,6 +21,63 @@ func setupTestDB(t *testing.T) {
 }
 
 func ptr(i int) *int { return &i }
+
+func TestInstructionsNameTheProjectsThatExist(t *testing.T) {
+	setupTestDB(t)
+
+	// With nothing in the table there is no list to hand over, so the client is
+	// pointed at the tool that will have one later.
+	empty := instructions()
+	if !strings.Contains(empty, "tix_projects") {
+		t.Fatalf("instructions with no projects = %q, want them to name tix_projects", empty)
+	}
+
+	for _, name := range []string{"frontend", "Brainstorm-Output"} {
+		if _, err := tix.CreateProject(tix.Project{Name: name}); err != nil {
+			t.Fatalf("CreateProject(%q): %v", name, err)
+		}
+	}
+
+	got := instructions()
+	for _, name := range []string{"frontend", "Brainstorm-Output"} {
+		if !strings.Contains(got, name) {
+			t.Errorf("instructions = %q, want them to list project %q", got, name)
+		}
+	}
+	// Listing the names is only half of it: without the rule a client still
+	// treats a name it invented as good as one off the list.
+	if !strings.Contains(got, "create=true") {
+		t.Errorf("instructions = %q, want them to name the way to add a project", got)
+	}
+}
+
+func TestNewServerCarriesInstructions(t *testing.T) {
+	setupTestDB(t)
+
+	if _, err := tix.CreateProject(tix.Project{Name: "frontend"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	// The instructions only matter if they reach the client, which is what a
+	// server built with nil options never did.
+	ctx := context.Background()
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	serverSession, err := NewServer().Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	defer serverSession.Close()
+
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test", Version: "0.0.1"}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer clientSession.Close()
+
+	if got := clientSession.InitializeResult().Instructions; !strings.Contains(got, "frontend") {
+		t.Fatalf("instructions the client received = %q, want them to list project %q", got, "frontend")
+	}
+}
 
 func TestAddBatchCreatesEveryTicket(t *testing.T) {
 	setupTestDB(t)

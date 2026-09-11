@@ -40,6 +40,8 @@ A batch is validated whole before anything is written, so a missing title in the
 
 The `project` argument of every tool is resolved against the projects that exist, ignoring case and punctuation: `Front-End` reaches the project named `frontend`, and a name that matches nothing is an error listing the real project names. That is what keeps an invented spelling from becoming a fifth project whose tickets nobody else sees.
 
+The server also hands the client its instructions at connect time, and they carry the project list read when the server started, plus the rule to use one of those names. A client that can see the names has no reason to guess at one, which turns fragmentation from something the server rejects after the fact into something the client does not attempt. Projects created after the server started are not in that list — `tix_projects` answers live.
+
 Each tool returns compact JSON (both as structured content and as its text representation) rather than the CLI's human-formatted, colorized output.
 
 ## Register with Claude Desktop
