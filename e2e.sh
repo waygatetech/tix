@@ -439,6 +439,20 @@ kill "$web_pid" 2>/dev/null || true
 wait "$web_pid" 2>/dev/null || true
 trap 'rm -rf "$tmp" 2>/dev/null || true' EXIT
 
+# web service: install writes to ~/Library/LaunchAgents and loads a real agent,
+# so the suite only exercises the read-only surface — that the subcommands are
+# wired up and status reports every piece a person has to get right.
+check "web advertises the always-on install" "install" "$tmp/tix" web --help
+check "web install explains the hosts step" "/etc/hosts" "$tmp/tix" web install --help
+if [[ "$(uname)" == "Darwin" ]]; then
+  check "web status reports the port" "port:" "$tmp/tix" web status
+  check "web status reports the hostname step" "tix.local" "$tmp/tix" web status
+  check "web status reports which database it would serve" "$TIX_DB" "$tmp/tix" web status
+else
+  check "web install declines off macOS" "macOS-only" "$tmp/tix" web install
+  check_status "web install off macOS exits non-zero" 1 "$tmp/tix" web install
+fi
+
 # graceful failures
 check_status "init-agent without project exits non-zero" 1 "$tmp/tix" init-agent
 check "list outside a registered repo still needs --project" "no project's repo path contains" "$tmp/tix" list

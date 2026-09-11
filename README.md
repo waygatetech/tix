@@ -97,7 +97,8 @@ tix stale --project acme
 - `tix done [id] [--project NAME]` — mark a ticket done.
 - `tix rm [id] --project NAME` — remove a ticket from a project.
 - `tix prefix [project] [prefix]` — show ticket ID prefixes, or pin one for a project.
-- `tix web [--port N]` — serve the cross-project dashboard at `http://localhost:8080`.
+- `tix web [--port N] [--global]` — serve the cross-project dashboard at `http://localhost:7433`.
+- `tix web install|uninstall|status [--port N]` — run that dashboard as a macOS login agent, always available at `http://tix.local:7433`.
 - `tix best-practices [--json] [--compact] [--fields FIELDS]` — print terse workflow guidance, handy for scripting or onboarding an AI agent.
 - `tix mcp` — run an MCP server on stdio exposing the ticket operations as tools, for MCP clients like Claude Desktop. See [mcp/README.md](mcp/README.md).
 - `tix init-agent PROJECT [--db PATH]` — append idempotent `tix` workflow guidance to `AGENTS.md` and `CLAUDE.md` at the current Git repository root (or the current directory), so coding agents know how to use `tix` in this repo.
@@ -163,7 +164,7 @@ tix prefix frontend fe  # pin it
 `tix web` serves one page showing every project's backlog at once:
 
 ```sh
-tix web            # http://localhost:8080
+tix web            # http://localhost:7433
 tix web --port 9000
 ```
 
@@ -175,10 +176,32 @@ It reads the same database the CLI writes, so it needs no setup and nothing to k
 - **Dark mode** — follows the system setting, with a toggle that overrides it.
 - **A staleness check** — a tab left open notices when a CLI command changes the backlog and offers to reload.
 
+#### Always on, at `tix.local`
+
+On macOS the dashboard can run as a login agent instead of a command you remember to type:
+
+```sh
+tix web install     # write and load the launchd agent
+tix web status      # installed? loaded? listening? reachable by name?
+tix web uninstall   # stop it and remove the job
+```
+
+The agent runs as you, on localhost, and starts again at every login. `install` prints the one step it will not take on your behalf — a line in `/etc/hosts`, which is root-owned and machine-wide:
+
+```sh
+echo '127.0.0.1	tix.local' | sudo tee -a /etc/hosts
+```
+
+With that line in place, the dashboard is at **http://tix.local:7433** whenever the machine is up. macOS resolves `.local` over mDNS but consults `/etc/hosts` first, so nothing needs to be advertised on the network.
+
+The agent always serves the global database — or `TIX_DB` from its own environment — and never a repo-local one. A process that starts before you have opened a terminal has no meaningful working directory, the same reason [`tix mcp`](mcp/README.md) requires an explicit project. Run `tix web` in the foreground when you want a repo's own backlog.
+
+Its log is at `~/.tix/web.log`.
+
 The same view is available as JSON at `/api/dashboard`:
 
 ```sh
-curl -s localhost:8080/api/dashboard | jq '.status_counts'
+curl -s localhost:7433/api/dashboard | jq '.status_counts'
 ```
 
 The server binds to `localhost` and never writes: it is a window onto your own database, not a shared tracker, so there is nothing to authenticate. Filing and closing tickets stays in the CLI.

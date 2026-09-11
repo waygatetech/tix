@@ -14,14 +14,31 @@ import (
 
 var webPort int
 
+// webGlobal makes the server ignore a repo-local database. The installed agent
+// always passes it; a person running `tix web` in a repo usually means that
+// repo's backlog, so it stays off by default.
+var webGlobal bool
+
+// webDefaultPort is the port both the foreground server and the installed agent
+// use, so the URL is the same either way. 8080 is too popular to claim for a
+// service that is meant to sit there for months.
+const webDefaultPort = 7433
+
 // tix web is the one view a per-repo tracker cannot offer: every project's
 // backlog on one page, because every project lives in one database. It stays
 // bound to localhost and read-only — it reads the same file the CLI writes, so
 // there is nothing here to authenticate and nothing to lose.
 var webCmd = &cobra.Command{
-	Use:               "web",
-	Short:             "Serve a cross-project dashboard of every ticket",
-	PersistentPreRunE: initDB,
+	Use:   "web",
+	Short: "Serve a cross-project dashboard of every ticket",
+	// PreRunE rather than PersistentPreRunE: install, uninstall, and status
+	// manage a launchd job and have no reason to open a database.
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if webGlobal {
+			return initDBWithoutRepoLookup(cmd, args)
+		}
+		return initDB(cmd, args)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", webHandler)
@@ -34,7 +51,8 @@ var webCmd = &cobra.Command{
 }
 
 func init() {
-	webCmd.Flags().IntVar(&webPort, "port", 8080, "port to serve on")
+	webCmd.Flags().IntVar(&webPort, "port", webDefaultPort, "port to serve on")
+	webCmd.Flags().BoolVar(&webGlobal, "global", false, "serve the global database, ignoring any repo-local one")
 	rootCmd.AddCommand(webCmd)
 }
 
