@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/waygatetech/tix/internal/tix"
 	"github.com/spf13/cobra"
+	"github.com/waygatetech/tix/internal/tix"
 )
 
 var projectsJSONOutput bool

@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/waygatetech/tix/internal/tix"
 	"github.com/spf13/cobra"
+	"github.com/waygatetech/tix/internal/tix"
 )
 
 var project string

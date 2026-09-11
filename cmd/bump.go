@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/waygatetech/tix/internal/tix"
 	"github.com/spf13/cobra"
+	"github.com/waygatetech/tix/internal/tix"
 )
 
 // bumpCmd represents the bump command

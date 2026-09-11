@@ -6,8 +6,8 @@ package cmd
 import (
 	"os"
 
-	"github.com/waygatetech/tix/internal/tix"
 	"github.com/spf13/cobra"
+	"github.com/waygatetech/tix/internal/tix"
 	_ "modernc.org/sqlite"
 )
 

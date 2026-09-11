@@ -6,8 +6,8 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/waygatetech/tix/internal/tix"
 	"github.com/spf13/cobra"
+	"github.com/waygatetech/tix/internal/tix"
 )
 
 // nextCmd represents the next command
