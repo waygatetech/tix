@@ -240,6 +240,9 @@ go build ./...      # verify everything compiles
 ```
 
 Contributions are welcome — keep changes small and focused, and follow standard `gofmt` formatting.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for where code goes, what to run before opening a pull
+request, and how to file a bug. Everyone participating is expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ### Cutting a release
 

@@ -1,0 +1,72 @@
+name: Bug report
+description: Something in tix does not behave the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The most useful bug report is one somebody else can reproduce,
+        so the exact command you ran matters more than anything else here.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you run, and what did tix do?
+      placeholder: |
+        $ tix list --project acme
+        <output, including any error>
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: >
+        Starting from an empty database if you can — set `TIX_DB` to a scratch path so the
+        steps do not depend on your real tickets.
+      placeholder: |
+        1. export TIX_DB=/tmp/bug.db
+        2. tix projects add acme
+        3. tix add --project acme "..." --body "..."
+        4. tix list --project acme
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: tix version
+      description: Output of `tix --version`.
+      placeholder: tix version v0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and architecture
+      placeholder: macOS 15.2, arm64
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which part of tix?
+      options:
+        - CLI
+        - Web dashboard (tix web)
+        - MCP server (tix mcp)
+        - Not sure
+    validations:
+      required: true

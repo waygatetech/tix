@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest a command, flag, or behavior for tix
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `tix` stays deliberately small — no server, no config file, minimal abstractions. The
+        best case for a feature is a concrete workflow it unblocks, not a capability in the
+        abstract.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the workflow you are stuck on, not the solution yet.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like tix to do?
+      description: If it is a new command or flag, sketch what invoking it looks like.
+      placeholder: |
+        tix list --project acme --since 7d
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?
+      description: >
+        Existing commands, a shell pipeline, another tool — knowing the workaround helps judge
+        how much the feature buys.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: searched
+    attributes:
+      label: Before filing
+      options:
+        - label: I checked the README to confirm this is not already possible.
+          required: true
+        - label: I searched existing issues for the same request.
+          required: true
