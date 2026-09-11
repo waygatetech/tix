@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/waygatetech/tix/internal/tix"
@@ -130,9 +131,16 @@ func ticketLine(id int, priority int, title string) string {
 }
 
 // ticketDetail is the full form: the line, the status and project that a bare
-// id does not reveal, and the body.
+// id does not reveal, when it was last written, and the body.
+//
+// Only the last write is named, and only here. It is what says whether an
+// in_progress ticket is being worked on or was abandoned by an agent that
+// died, which a status alone cannot; created_at answers nothing a caller acts
+// on, so it stays out of a reply that is paid for by the token.
 func ticketDetail(t tix.Ticket) string {
-	detail := fmt.Sprintf("%s (%s, %s)", ticketLine(t.ID, t.Priority, t.Title), t.Status, t.Project)
+	detail := fmt.Sprintf("%s (%s, %s, updated %s)",
+		ticketLine(t.ID, t.Priority, t.Title), t.Status, t.Project,
+		t.UpdatedAt.UTC().Format(time.RFC3339))
 	if t.Body != "" {
 		detail += "\n" + t.Body
 	}

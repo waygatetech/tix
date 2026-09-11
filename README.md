@@ -76,6 +76,9 @@ tix claim-next --project acme
 
 # wrap up
 tix done 1
+
+# find tickets an agent claimed and never finished
+tix stale --project acme
 ```
 
 ## Commands
@@ -85,7 +88,8 @@ tix done 1
 - `tix search TERM --project NAME [--status STATUS] [--priority N] [--limit N] [--json] [--compact] [--fields FIELDS]` — find a project's tickets whose title or body contains `TERM`. Matching ignores case and is a plain substring match, so `%` and `_` are searched for literally. Every status is searched, done included — work that already shipped is as much a duplicate as an open ticket — so narrow with `--status open` when only the live backlog matters.
 - `tix next --project NAME [--json] [--compact] [--fields FIELDS]` — show the highest-priority open ticket for a project.
 - `tix claim-next --project NAME [--json] [--compact] [--fields FIELDS]` — mark the highest-priority open ticket `in_progress` and print it.
-- `tix show [id] [--project NAME] [--json] [--compact] [--fields FIELDS]` — show full details for one ticket. `--project` is optional and asserts which project the ticket belongs to: a mismatch is an error.
+- `tix show [id] [--project NAME] [--json] [--compact] [--fields FIELDS]` — show full details for one ticket, including when it was created and last written. `--project` is optional and asserts which project the ticket belongs to: a mismatch is an error.
+- `tix stale --project NAME [--for DURATION] [--status STATUS] [--limit N] [--json] [--compact] [--fields FIELDS]` — list tickets that have sat in one status without a write for longer than `--for` (default `24h`, `0` for no threshold), oldest first. The default status is `in_progress`, which is where an agent that dies mid-ticket leaves one: `next` skips it because it is no longer open, so nothing else would mention it again. Put one back in the queue with `tix edit ID --status open`.
 - `tix projects [--json] [--compact] [--fields FIELDS]` — list all projects with ticket counts grouped by status.
 - `tix projects add NAME [--key PREFIX] [--repo-path PATH]` — create a project. `--key` pins its ticket ID prefix; `--repo-path` records where its code lives.
 - `tix projects set-repo-path NAME [PATH]` — record where an existing project's code lives, so commands run there can skip `--project`. `PATH` defaults to the current directory.

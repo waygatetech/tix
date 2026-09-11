@@ -70,6 +70,12 @@ func TestMigrateUpgradesPreMigrationDatabase(t *testing.T) {
 	if _, err := Add("existing ticket", "", 2, "acme"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
+	// A genuinely pre-migration database predates every column the migrations
+	// added, so the simulation drops updated_at along with the version; leaving
+	// it in place would test a state no real database is ever in.
+	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN updated_at`); err != nil {
+		t.Fatalf("drop updated_at: %v", err)
+	}
 	if _, err := db.Exec(`PRAGMA user_version = 0`); err != nil {
 		t.Fatalf("reset user_version: %v", err)
 	}
@@ -87,6 +93,17 @@ func TestMigrateUpgradesPreMigrationDatabase(t *testing.T) {
 	}
 	if lines := List("acme", false); len(lines) != 1 {
 		t.Errorf("got %d tickets after migrating, want 1: %v", len(lines), lines)
+	}
+
+	// The backfill reads created_at, not the clock, so a ticket that has sat
+	// untouched for a month is stale the moment the column exists rather than
+	// looking like it was worked on during the migration.
+	ticket, err := Show(1)
+	if err != nil {
+		t.Fatalf("Show(1) after migrating: %v", err)
+	}
+	if ticket.UpdatedAt.IsZero() || !ticket.UpdatedAt.Equal(ticket.CreatedAt) {
+		t.Errorf("backfilled updated_at = %v, want created_at %v", ticket.UpdatedAt, ticket.CreatedAt)
 	}
 }
 

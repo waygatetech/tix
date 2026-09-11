@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/waygatetech/tix/internal/tix"
@@ -313,7 +315,16 @@ func TestToolsRenderPlainText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("showTool: %v", err)
 	}
-	if got, want := resultText(t, res), "1 [P1] fix login (open, acme)\nit 500s"; got != want {
+	// The detail names the last write as well, so a caller can tell a ticket
+	// someone is working on from one an agent abandoned. It is a clock reading,
+	// so the expectation comes from what was stored.
+	stored, err := tix.Show(1)
+	if err != nil {
+		t.Fatalf("Show(1): %v", err)
+	}
+	want := fmt.Sprintf("1 [P1] fix login (open, acme, updated %s)\nit 500s",
+		stored.UpdatedAt.UTC().Format(time.RFC3339))
+	if got := resultText(t, res); got != want {
 		t.Errorf("show reply = %q, want %q", got, want)
 	}
 

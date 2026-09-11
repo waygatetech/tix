@@ -406,6 +406,12 @@ func TestMigrationBackfillsProjectsAndPinnedPrefixes(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO project_prefixes (project, prefix) VALUES ('acme', 'acm'), ('unused', 'un')`); err != nil {
 		t.Fatalf("insert legacy prefixes: %v", err)
 	}
+	// A database that stopped at version 2 predates updated_at, so the column
+	// goes with the version: what is being tested is the backfill running on an
+	// old schema, not on this one with the number changed.
+	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN updated_at`); err != nil {
+		t.Fatalf("drop updated_at: %v", err)
+	}
 	if _, err := db.Exec(`PRAGMA user_version = 2`); err != nil {
 		t.Fatalf("reset user_version: %v", err)
 	}

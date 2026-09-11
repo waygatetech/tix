@@ -23,6 +23,7 @@ var guide = bestPracticesGuide{
 	Commands: []string{
 		"list --project NAME --status open --limit N",
 		"show ID",
+		"stale --project NAME  # tickets left in_progress by an agent that died; --for 2h to widen",
 		"search --project NAME TERM  # title and body, every status; check before adding",
 		"add --project NAME --body-file PATH --priority N TITLE",
 		"projects  # project names; --project must be one of them",

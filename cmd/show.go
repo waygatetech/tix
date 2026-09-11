@@ -2,10 +2,18 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/waygatetech/tix/internal/tix"
 )
+
+// formatTimestamp renders a stored time the way the database holds it: UTC, to
+// the second. A ticket's timestamps are compared across machines often enough
+// that a local-time rendering would be the wrong default.
+func formatTimestamp(t time.Time) string {
+	return t.UTC().Format(time.RFC3339)
+}
 
 var showCmd = &cobra.Command{
 	Use:               "show [id]",
@@ -35,6 +43,11 @@ var showCmd = &cobra.Command{
 		}
 		fmt.Printf("%s [P%d] %s (%s, %s)\n",
 			tix.FormatID(prefix, ticket.ID), ticket.Priority, ticket.Title, ticket.Status, ticket.Project)
+		// Timestamps print here and nowhere else in the plain output: a listing
+		// is read a screen at a time, and this is the view with room for them.
+		fmt.Printf("created %s, updated %s (idle %s)\n",
+			formatTimestamp(ticket.CreatedAt), formatTimestamp(ticket.UpdatedAt),
+			tix.FormatAge(time.Since(ticket.UpdatedAt)))
 		if ticket.Body != "" {
 			fmt.Println(ticket.Body)
 		}

@@ -99,6 +99,18 @@ var migrations = []string{
 		(SELECT prefix FROM project_prefixes WHERE project_prefixes.project = projects.name), '');
 	DROP TABLE project_prefixes;
 	CREATE UNIQUE INDEX IF NOT EXISTS projects_key_unique ON projects(key) WHERE key != '';`,
+	// updated_at is what makes a stuck ticket findable: an agent that crashes
+	// mid-ticket leaves it in_progress forever, and without a timestamp nothing
+	// can tell that apart from work started a minute ago. SQLite rejects a
+	// non-constant column default, so the column arrives without one and every
+	// write sets it explicitly.
+	//
+	// Existing rows are backfilled from created_at rather than from now, so a
+	// ticket claimed last week reads as stale immediately instead of looking
+	// fresh because the migration touched it.
+	`ALTER TABLE tickets ADD COLUMN updated_at DATETIME;
+	UPDATE tickets SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL;
+	UPDATE tickets SET updated_at = created_at WHERE updated_at IS NULL;`,
 }
 
 // migrate applies every migration the database has not seen yet. The version

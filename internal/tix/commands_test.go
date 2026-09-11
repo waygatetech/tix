@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -37,6 +38,35 @@ func newProjects(t *testing.T, names ...string) {
 		if _, err := CreateProject(Project{Name: name}); err != nil {
 			t.Fatalf("CreateProject(%q): %v", name, err)
 		}
+	}
+}
+
+// stripTimestamps checks that a read populated the timestamps and then clears
+// them, so a test can compare the rest against a literal it can actually
+// predict.
+func stripTimestamps(t *testing.T, tickets []Ticket) []Ticket {
+	t.Helper()
+
+	stripped := make([]Ticket, len(tickets))
+	for i, ticket := range tickets {
+		if ticket.CreatedAt.IsZero() || ticket.UpdatedAt.IsZero() {
+			t.Errorf("ticket %d timestamps = (%v, %v), want both set", ticket.ID, ticket.CreatedAt, ticket.UpdatedAt)
+		}
+		ticket.CreatedAt = time.Time{}
+		ticket.UpdatedAt = time.Time{}
+		stripped[i] = ticket
+	}
+	return stripped
+}
+
+// backdate moves a ticket's last write into the past, which is the only way to
+// test staleness without a test that sleeps for a day.
+func backdate(t *testing.T, id int, age time.Duration) {
+	t.Helper()
+
+	when := time.Now().UTC().Add(-age).Format(sqlTimeLayout)
+	if _, err := db.Exec(`UPDATE tickets SET updated_at = ? WHERE id = ?`, when, id); err != nil {
+		t.Fatalf("backdate ticket %d: %v", id, err)
 	}
 }
 
@@ -180,7 +210,7 @@ func TestListTicketsFilters(t *testing.T) {
 			Project:  "acme",
 		},
 	}
-	if !reflect.DeepEqual(got, want) {
+	if got := stripTimestamps(t, got); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ListTickets filtered = %#v, want %#v", got, want)
 	}
 }
@@ -314,12 +344,198 @@ func TestShowReturnsTicketByID(t *testing.T) {
 		Priority: 1,
 		Project:  "acme",
 	}
-	if !reflect.DeepEqual(got, want) {
+	if got := stripTimestamps(t, []Ticket{got})[0]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Show(%d) = %#v, want %#v", id, got, want)
 	}
 
 	if _, err := Show(99); err == nil || !strings.Contains(err.Error(), "no such ticket: 99") {
 		t.Fatalf("Show missing ticket error = %v, want no such ticket: 99", err)
+	}
+}
+
+// The point of updated_at is that a write moves it: a ticket whose last write
+// is old is one nothing has touched, which is what staleness means.
+func TestWritesMoveUpdatedAt(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		write func(id int) error
+	}{
+		{"Done", func(id int) error { return Done(id) }},
+		{"Bump", func(id int) error { _, _, err := Bump(id, 0); return err }},
+		{"Edit", func(id int) error {
+			title := "retitled"
+			_, err := Edit(id, EditOptions{Title: &title})
+			return err
+		}},
+		{"ClaimNext", func(int) error { _, err := ClaimNext("acme"); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A database per case, so ClaimNext cannot claim a ticket an
+			// earlier case left lying around.
+			setupTestDB(t)
+			newProjects(t, "acme")
+
+			id, err := Add(tc.name, "body", 2, "acme")
+			if err != nil {
+				t.Fatalf("Add: %v", err)
+			}
+			backdate(t, int(id), 48*time.Hour)
+
+			before, err := Show(int(id))
+			if err != nil {
+				t.Fatalf("Show before write: %v", err)
+			}
+			if err := tc.write(int(id)); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+
+			after, err := Show(int(id))
+			if err != nil {
+				t.Fatalf("Show after write: %v", err)
+			}
+			if !after.UpdatedAt.After(before.UpdatedAt) {
+				t.Errorf("updated_at = %v after %s, want later than %v", after.UpdatedAt, tc.name, before.UpdatedAt)
+			}
+			// created_at is the one timestamp a write must not touch, or every
+			// ticket looks as though it were filed the moment it was last edited.
+			if !after.CreatedAt.Equal(before.CreatedAt) {
+				t.Errorf("created_at = %v after %s, want %v", after.CreatedAt, tc.name, before.CreatedAt)
+			}
+		})
+	}
+}
+
+// An edit that sets no fields is rejected, and must not count as a write: a
+// failed call should not make an abandoned ticket look freshly worked on.
+func TestEmptyEditLeavesUpdatedAtAlone(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	id, err := Add("untouched", "body", 2, "acme")
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	backdate(t, int(id), 48*time.Hour)
+	before, err := Show(int(id))
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+
+	if _, err := Edit(int(id), EditOptions{}); err == nil {
+		t.Fatal("Edit with no fields = nil, want an error")
+	}
+
+	after, err := Show(int(id))
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("updated_at = %v after a rejected edit, want %v", after.UpdatedAt, before.UpdatedAt)
+	}
+}
+
+func TestStaleTicketsFindsAbandonedClaims(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme", "zen")
+
+	for _, title := range []string{"abandoned", "very abandoned", "just claimed", "still open"} {
+		if _, err := Add(title, "body", 2, "acme"); err != nil {
+			t.Fatalf("Add(%q): %v", title, err)
+		}
+	}
+	if _, err := Add("other backlog", "body", 2, "zen"); err != nil {
+		t.Fatalf("Add(zen): %v", err)
+	}
+
+	inProgress := "in_progress"
+	for id, age := range map[int]time.Duration{
+		1: 30 * time.Hour,     // claimed and abandoned
+		2: 7 * 24 * time.Hour, // abandoned longer ago
+		3: 10 * time.Minute,   // claimed, still being worked on
+	} {
+		if _, err := Edit(id, EditOptions{Status: &inProgress}); err != nil {
+			t.Fatalf("Edit(%d): %v", id, err)
+		}
+		backdate(t, id, age)
+	}
+	// An old ticket nobody claimed is a backlog, not a stuck ticket.
+	backdate(t, 4, 30*24*time.Hour)
+	if _, err := Edit(5, EditOptions{Status: &inProgress}); err != nil {
+		t.Fatalf("Edit(5): %v", err)
+	}
+	backdate(t, 5, 30*time.Hour)
+
+	stale, err := StaleTickets(StaleOptions{Project: "acme", Older: StaleAge})
+	if err != nil {
+		t.Fatalf("StaleTickets: %v", err)
+	}
+	// Oldest first, so the ticket most likely abandoned is read first.
+	if got := ticketIDs(stale); !reflect.DeepEqual(got, []int{2, 1}) {
+		t.Fatalf("StaleTickets(acme) = %v, want [2 1]", got)
+	}
+
+	// The threshold is a knob: narrow it and the ticket claimed minutes ago
+	// shows up too. Zero asks for no threshold at all, which is the same set
+	// here rather than the default quietly coming back.
+	for _, older := range []time.Duration{time.Minute, 0} {
+		stale, err = StaleTickets(StaleOptions{Project: "acme", Older: older})
+		if err != nil {
+			t.Fatalf("StaleTickets(older=%v): %v", older, err)
+		}
+		if got := ticketIDs(stale); !reflect.DeepEqual(got, []int{2, 1, 3}) {
+			t.Fatalf("StaleTickets(acme, %v) = %v, want [2 1 3]", older, got)
+		}
+	}
+
+	// So is the status: an untouched open ticket is findable on request.
+	stale, err = StaleTickets(StaleOptions{Project: "acme", Status: "open", Older: StaleAge})
+	if err != nil {
+		t.Fatalf("StaleTickets with a status: %v", err)
+	}
+	if got := ticketIDs(stale); !reflect.DeepEqual(got, []int{4}) {
+		t.Fatalf("StaleTickets(acme, open) = %v, want [4]", got)
+	}
+
+	stale, err = StaleTickets(StaleOptions{Project: "acme", Older: StaleAge, Limit: 1})
+	if err != nil {
+		t.Fatalf("StaleTickets with a limit: %v", err)
+	}
+	if got := ticketIDs(stale); !reflect.DeepEqual(got, []int{2}) {
+		t.Fatalf("StaleTickets(acme, limit 1) = %v, want [2]", got)
+	}
+
+	if _, err := StaleTickets(StaleOptions{Project: "acme", Limit: -1}); err == nil {
+		t.Error("StaleTickets with a negative limit = nil, want an error")
+	}
+	if _, err := StaleTickets(StaleOptions{Project: "nope"}); err == nil {
+		t.Error("StaleTickets on an unknown project = nil, want an error")
+	}
+}
+
+func ticketIDs(tickets []Ticket) []int {
+	ids := make([]int, len(tickets))
+	for i, ticket := range tickets {
+		ids[i] = ticket.ID
+	}
+	return ids
+}
+
+func TestFormatAge(t *testing.T) {
+	for _, tc := range []struct {
+		age  time.Duration
+		want string
+	}{
+		{-time.Hour, "<1m"},
+		{30 * time.Second, "<1m"},
+		{90 * time.Second, "1m"},
+		{59 * time.Minute, "59m"},
+		{time.Hour + 30*time.Minute, "1h30m"},
+		{25 * time.Hour, "1d1h"},
+		{7 * 24 * time.Hour, "7d0h"},
+	} {
+		if got := FormatAge(tc.age); got != tc.want {
+			t.Errorf("FormatAge(%v) = %q, want %q", tc.age, got, tc.want)
+		}
 	}
 }
 

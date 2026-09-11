@@ -197,6 +197,23 @@ check "show supports compact JSON output" '{"id":2,' "$tmp/tix" show 2 --json --
 check "show supports JSON field selection" '{"id":2,"status":"open"}' "$tmp/tix" show 2 --json --compact --fields id,status
 check "claim-next marks ticket in progress" '"status":"in_progress"' "$tmp/tix" claim-next --project zen --json --compact
 check "claim-next removes claimed ticket from next" "no open tickets" "$tmp/tix" next --project zen
+
+# a ticket claimed by an agent that died stays in_progress forever, so stale is
+# the only thing that names it again. --for 0 stands in for waiting a day.
+check "stale finds a claimed ticket once the window is zero" "ze-3" "$tmp/tix" stale --project zen --for 0
+check "stale reports how long a ticket has been idle" "idle" "$tmp/tix" stale --project zen --for 0
+check_absent "stale ignores a ticket claimed just now" "ze-3" "$tmp/tix" stale --project zen
+check_absent "stale ignores tickets nobody claimed" "ac-" "$tmp/tix" stale --project acme --for 0
+check "stale can look at another status" "ac-" "$tmp/tix" stale --project acme --for 0 --status open
+check "stale supports JSON field selection" '[{"id":3,"status":"in_progress"}]' "$tmp/tix" stale --project zen --for 0 --json --compact --fields id,status
+check "stale rejects a negative window" "--for must be >= 0" "$tmp/tix" stale --project zen --for -1h
+check_status "stale with a negative window exits non-zero" 1 "$tmp/tix" stale --project zen --for -1h
+
+# timestamps are stored, so show surfaces them rather than leaving the database
+# the only place they exist
+check "show reports when a ticket was created" "created 20" "$tmp/tix" show 2
+check "show reports the last write" "updated 20" "$tmp/tix" show 2
+check "show keeps timestamps in JSON" '"updated_at":' "$tmp/tix" show 2 --json --compact
 check "bump #1 to priority 0" "ac-1 -> P0" "$tmp/tix" bump 1 0
 check "next now returns bumped ticket" "fix login bug" "$tmp/tix" next --project acme
 
