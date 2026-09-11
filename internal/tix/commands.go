@@ -3,6 +3,7 @@ package tix
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -312,6 +313,23 @@ func Projects() ([]ProjectSummary, error) {
 		return nil, err
 	}
 	return projects, nil
+}
+
+// FormatStatusCounts renders a summary's per-status tallies as "done=1 open=3".
+// The order is sorted rather than map order, so two identical summaries render
+// identically instead of looking like a change.
+func FormatStatusCounts(counts map[string]int) string {
+	statuses := make([]string, 0, len(counts))
+	for status := range counts {
+		statuses = append(statuses, status)
+	}
+	sort.Strings(statuses)
+
+	parts := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		parts = append(parts, fmt.Sprintf("%s=%d", status, counts[status]))
+	}
+	return strings.Join(parts, " ")
 }
 
 type EditOptions struct {

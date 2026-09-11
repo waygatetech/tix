@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -30,7 +29,7 @@ var projectsCmd = &cobra.Command{
 		for _, project := range projects {
 			fmt.Printf("%s (%s) %s total=%d\n",
 				project.Project, project.Key,
-				statusCounts(project.StatusCounts), project.Total)
+				tix.FormatStatusCounts(project.StatusCounts), project.Total)
 		}
 		return nil
 	},
@@ -118,18 +117,4 @@ func init() {
 	projectsCmd.AddCommand(projectsAddCmd)
 	projectsCmd.AddCommand(projectsSetRepoPathCmd)
 	rootCmd.AddCommand(projectsCmd)
-}
-
-func statusCounts(counts map[string]int) string {
-	statuses := make([]string, 0, len(counts))
-	for status := range counts {
-		statuses = append(statuses, status)
-	}
-	sort.Strings(statuses)
-
-	parts := make([]string, 0, len(statuses))
-	for _, status := range statuses {
-		parts = append(parts, fmt.Sprintf("%s=%d", status, counts[status]))
-	}
-	return strings.Join(parts, " ")
 }

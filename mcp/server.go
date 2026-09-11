@@ -95,24 +95,37 @@ func instructions() string {
 	return b.String()
 }
 
-type ticketOut struct {
-	ID       int    `json:"id"`
-	Title    string `json:"title"`
-	Body     string `json:"body,omitempty"`
-	Status   string `json:"status"`
-	Priority int    `json:"priority"`
-	Project  string `json:"project"`
+// Every tool replies with one text block and nothing else.
+//
+// The SDK derives an output schema from a typed result and then sends that
+// result twice — once as structured content, once as its JSON text — so six
+// typed tools cost 2,097 measured bytes of schema in every tools/list plus a
+// doubled payload on every call. Nothing here consumes the structured half: a
+// client reads the reply, and the ids it needs to pass back are in the text.
+// Handlers therefore return an `any` result, which is how the SDK is told to
+// generate no output schema, and build the text themselves.
+//
+// The text mirrors the CLI's formatting, which is measurably shorter than the
+// JSON it replaced. The one deliberate difference is that ids print bare
+// rather than prefixed: the tools take an integer id, so `78` is what a client
+// can hand back to tix_show, and `ti-78` is not.
+func textResult(text string) *mcp.CallToolResult {
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}
 }
 
-func toTicketOut(t tix.Ticket) ticketOut {
-	return ticketOut{
-		ID:       t.ID,
-		Title:    t.Title,
-		Body:     t.Body,
-		Status:   t.Status,
-		Priority: t.Priority,
-		Project:  t.Project,
+// ticketLine is the one-line form shared by list and the add replies.
+func ticketLine(id int, priority int, title string) string {
+	return fmt.Sprintf("%d [P%d] %s", id, priority, title)
+}
+
+// ticketDetail is the full form: the line, the status and project that a bare
+// id does not reveal, and the body.
+func ticketDetail(t tix.Ticket) string {
+	detail := fmt.Sprintf("%s (%s, %s)", ticketLine(t.ID, t.Priority, t.Title), t.Status, t.Project)
+	if t.Body != "" {
+		detail += "\n" + t.Body
 	}
+	return detail
 }
 
 type addArgs struct {
@@ -123,33 +136,29 @@ type addArgs struct {
 	Create   bool   `json:"create,omitempty" jsonschema:"create the project if it does not exist yet"`
 }
 
-type addOut struct {
-	ID       int64  `json:"id"`
-	Title    string `json:"title"`
-	Priority int    `json:"priority"`
-	Project  string `json:"project"`
-}
-
-func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.CallToolResult, addOut, error) {
+func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.CallToolResult, any, error) {
 	if args.Title == "" {
-		return nil, addOut{}, fmt.Errorf("title is required")
+		return nil, nil, fmt.Errorf("title is required")
 	}
 	if args.Body == "" {
-		return nil, addOut{}, fmt.Errorf("body is required")
+		return nil, nil, fmt.Errorf("body is required")
 	}
 	if args.Project == "" {
-		return nil, addOut{}, fmt.Errorf("project is required")
+		return nil, nil, fmt.Errorf("project is required")
 	}
 	priority := normalizePriority(args.Priority)
 	project, err := resolveProject(args.Project, args.Create)
 	if err != nil {
-		return nil, addOut{}, err
+		return nil, nil, err
 	}
 	id, err := tix.Add(args.Title, args.Body, priority, project)
 	if err != nil {
-		return nil, addOut{}, fmt.Errorf("add failed: %w", err)
+		return nil, nil, fmt.Errorf("add failed: %w", err)
 	}
-	return nil, addOut{ID: id, Title: args.Title, Priority: priority, Project: project}, nil
+	// The project is named even though the caller passed one: it was resolved,
+	// so this is what tells a caller who guessed at the spelling where the
+	// ticket actually landed.
+	return textResult(fmt.Sprintf("%s (%s)", ticketLine(int(id), priority, args.Title), project)), nil, nil
 }
 
 // normalizePriority defaults a missing priority and clamps an out-of-range one
@@ -185,47 +194,42 @@ type addBatchArgs struct {
 	Create  bool          `json:"create,omitempty" jsonschema:"create the project if it does not exist yet"`
 }
 
-type addBatchOut struct {
-	Tickets []addOut `json:"tickets"`
-	Project string   `json:"project"`
-	Created int      `json:"created"`
-}
-
-func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) (*mcp.CallToolResult, addBatchOut, error) {
+func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) (*mcp.CallToolResult, any, error) {
 	if len(args.Tickets) == 0 {
-		return nil, addBatchOut{}, fmt.Errorf("tickets is required and must not be empty")
+		return nil, nil, fmt.Errorf("tickets is required and must not be empty")
 	}
 	if args.Project == "" {
-		return nil, addBatchOut{}, fmt.Errorf("project is required")
+		return nil, nil, fmt.Errorf("project is required")
 	}
 	// Validate the whole batch before writing any of it: a batch that is going
 	// to be rejected should be rejected whole, not half-inserted.
 	for i, ticket := range args.Tickets {
 		if ticket.Title == "" {
-			return nil, addBatchOut{}, fmt.Errorf("tickets[%d]: title is required", i)
+			return nil, nil, fmt.Errorf("tickets[%d]: title is required", i)
 		}
 		if ticket.Body == "" {
-			return nil, addBatchOut{}, fmt.Errorf("tickets[%d]: body is required", i)
+			return nil, nil, fmt.Errorf("tickets[%d]: body is required", i)
 		}
 	}
 	project, err := resolveProject(args.Project, args.Create)
 	if err != nil {
-		return nil, addBatchOut{}, err
+		return nil, nil, err
 	}
 
-	out := addBatchOut{Project: project, Tickets: make([]addOut, 0, len(args.Tickets))}
+	lines := make([]string, 0, len(args.Tickets))
 	for i, ticket := range args.Tickets {
 		priority := normalizePriority(ticket.Priority)
 		id, err := tix.Add(ticket.Title, ticket.Body, priority, project)
 		if err != nil {
-			// Report what did land so the caller can retry the rest instead of
-			// re-sending the whole batch and duplicating tickets.
-			return nil, out, fmt.Errorf("add failed for tickets[%d] (%d of %d already created): %w", i, len(out.Tickets), len(args.Tickets), err)
+			// Name what did land so the caller can retry the rest instead of
+			// re-sending the whole batch and duplicating tickets. The ids go in
+			// the error because an error reply carries no payload of its own.
+			return nil, nil, fmt.Errorf("add failed for tickets[%d] (%d of %d already created: %s): %w",
+				i, len(lines), len(args.Tickets), strings.Join(lines, "; "), err)
 		}
-		out.Tickets = append(out.Tickets, addOut{ID: id, Title: ticket.Title, Priority: priority, Project: project})
+		lines = append(lines, ticketLine(int(id), priority, ticket.Title))
 	}
-	out.Created = len(out.Tickets)
-	return nil, out, nil
+	return textResult(fmt.Sprintf("created %d in %s\n%s", len(lines), project, strings.Join(lines, "\n"))), nil, nil
 }
 
 type listArgs struct {
@@ -236,16 +240,12 @@ type listArgs struct {
 	Limit    int    `json:"limit,omitempty" jsonschema:"limit the number of tickets returned (0 = no limit)"`
 }
 
-type listOut struct {
-	Tickets []ticketOut `json:"tickets"`
-}
-
-func listTool(_ context.Context, _ *mcp.CallToolRequest, args listArgs) (*mcp.CallToolResult, listOut, error) {
+func listTool(_ context.Context, _ *mcp.CallToolRequest, args listArgs) (*mcp.CallToolResult, any, error) {
 	if args.Project == "" {
-		return nil, listOut{}, fmt.Errorf("project is required")
+		return nil, nil, fmt.Errorf("project is required")
 	}
 	if args.Limit < 0 {
-		return nil, listOut{}, fmt.Errorf("limit must be >= 0")
+		return nil, nil, fmt.Errorf("limit must be >= 0")
 	}
 	tickets, err := tix.ListTickets(tix.ListOptions{
 		Project:  args.Project,
@@ -255,25 +255,36 @@ func listTool(_ context.Context, _ *mcp.CallToolRequest, args listArgs) (*mcp.Ca
 		Limit:    args.Limit,
 	})
 	if err != nil {
-		return nil, listOut{}, fmt.Errorf("list failed: %w", err)
+		return nil, nil, fmt.Errorf("list failed: %w", err)
 	}
-	out := make([]ticketOut, len(tickets))
+	// An empty list says so rather than returning a blank reply, which reads as
+	// a failed call.
+	if len(tickets) == 0 {
+		return textResult("no tickets"), nil, nil
+	}
+	lines := make([]string, len(tickets))
 	for i, t := range tickets {
-		out[i] = toTicketOut(t)
+		// Done tickets are marked the way the CLI marks them, since a list that
+		// includes them otherwise looks like a list of open work.
+		marker := ""
+		if t.Status == "done" {
+			marker = "x "
+		}
+		lines[i] = marker + ticketLine(t.ID, t.Priority, t.Title)
 	}
-	return nil, listOut{Tickets: out}, nil
+	return textResult(strings.Join(lines, "\n")), nil, nil
 }
 
 type showArgs struct {
 	ID int `json:"id" jsonschema:"the ticket id"`
 }
 
-func showTool(_ context.Context, _ *mcp.CallToolRequest, args showArgs) (*mcp.CallToolResult, ticketOut, error) {
+func showTool(_ context.Context, _ *mcp.CallToolRequest, args showArgs) (*mcp.CallToolResult, any, error) {
 	ticket, err := tix.Show(args.ID)
 	if err != nil {
-		return nil, ticketOut{}, err
+		return nil, nil, err
 	}
-	return nil, toTicketOut(ticket), nil
+	return textResult(ticketDetail(ticket)), nil, nil
 }
 
 type editArgs struct {
@@ -285,7 +296,7 @@ type editArgs struct {
 	Project  *string `json:"project,omitempty" jsonschema:"new project name"`
 }
 
-func editTool(_ context.Context, _ *mcp.CallToolRequest, args editArgs) (*mcp.CallToolResult, ticketOut, error) {
+func editTool(_ context.Context, _ *mcp.CallToolRequest, args editArgs) (*mcp.CallToolResult, any, error) {
 	ticket, err := tix.Edit(args.ID, tix.EditOptions{
 		Title:    args.Title,
 		Body:     args.Body,
@@ -294,19 +305,28 @@ func editTool(_ context.Context, _ *mcp.CallToolRequest, args editArgs) (*mcp.Ca
 		Project:  args.Project,
 	})
 	if err != nil {
-		return nil, ticketOut{}, fmt.Errorf("edit failed: %w", err)
+		return nil, nil, fmt.Errorf("edit failed: %w", err)
 	}
-	return nil, toTicketOut(ticket), nil
+	// The full detail, not just the fields that changed: an edit is where a
+	// caller most wants to see what the ticket now says.
+	return textResult(ticketDetail(ticket)), nil, nil
 }
 
-type projectsOut struct {
-	Projects []tix.ProjectSummary `json:"projects"`
-}
-
-func projectsTool(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, projectsOut, error) {
+func projectsTool(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 	projects, err := tix.Projects()
 	if err != nil {
-		return nil, projectsOut{}, fmt.Errorf("projects failed: %w", err)
+		return nil, nil, fmt.Errorf("projects failed: %w", err)
 	}
-	return nil, projectsOut{Projects: projects}, nil
+	if len(projects) == 0 {
+		return textResult("no projects"), nil, nil
+	}
+	lines := make([]string, len(projects))
+	for i, project := range projects {
+		// The CLI names each project's id prefix here; this reply leaves it out
+		// because these tools take an integer id, so the prefix is nothing the
+		// caller could pass back.
+		lines[i] = fmt.Sprintf("%s %s total=%d",
+			project.Project, tix.FormatStatusCounts(project.StatusCounts), project.Total)
+	}
+	return textResult(strings.Join(lines, "\n")), nil, nil
 }

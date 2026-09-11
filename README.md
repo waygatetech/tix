@@ -210,12 +210,14 @@ Measured against the current tool set:
 
 | Path | Permanent context | Measured size |
 | --- | --- | --- |
-| `tix mcp` | 6 tool schemas + server instructions | 6,042 bytes ≈ **1,300 tokens**, every session |
+| `tix mcp` | 6 tool schemas + server instructions | 3,955 bytes ≈ **870 tokens**, every session |
 | `tix` CLI | none | **0 tokens** |
 | `tix init-agent` block | guidance in `AGENTS.md` / `CLAUDE.md` | 726 bytes ≈ **200 tokens**, only for agents that read those files |
 | `tix best-practices` | printed on demand | 488 bytes ≈ **120 tokens**, only when the agent asks |
 
-So the CLI path costs roughly 200 tokens for an agent that reads `AGENTS.md`, against about 1,300 tokens of standing overhead for the MCP path — and the CLI's cost is content the agent would need anyway, not schema.
+So the CLI path costs roughly 200 tokens for an agent that reads `AGENTS.md`, against about 870 tokens of standing overhead for the MCP path — and the CLI's cost is content the agent would need anyway, not schema.
+
+The MCP figure was 6,052 bytes ≈ 1,354 tokens until the tools stopped declaring output schemas and stopped returning every payload twice (once as text, once as `structuredContent`); replies shrank with it, a five-ticket listing from 1,440 bytes to 328. See [mcp/README.md](mcp/README.md#replies-are-one-block-of-plain-text).
 
 **Use the CLI when the agent has a shell.** It is the token-efficient default, and it is the whole command surface rather than the authoring subset the MCP server exposes. **Use MCP for clients without a shell**, such as Claude Desktop, where the schema cost buys the only available access.
 

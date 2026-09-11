@@ -34,7 +34,13 @@ A brainstorm rarely ends with one ticket. `tix_add_batch` takes the whole list �
 }
 ```
 
-Every ticket in a batch lands in the same project; move one afterwards with `tix_edit` if it belongs elsewhere. The reply lists each new ticket's id alongside the resolved project name and a `created` count.
+Every ticket in a batch lands in the same project; move one afterwards with `tix_edit` if it belongs elsewhere. The reply counts what landed and lists each new ticket:
+
+```
+created 2 in tix
+84 [P1] Add tix_add_batch
+85 [P2] Document the batch tool
+```
 
 A batch is validated whole before anything is written, so a missing title in the fifth ticket rejects the call naming `tickets[4]` and leaves no half-written batch behind — and no newly created project either, even with `create: true`. If a write does fail partway (a database error rather than bad input), the error says how many tickets already landed and the payload still lists them, so the retry can skip those instead of duplicating them.
 
@@ -42,7 +48,20 @@ The `project` argument of every tool is resolved against the projects that exist
 
 The server also hands the client its instructions at connect time, and they carry the project list read when the server started, plus the rule to use one of those names. A client that can see the names has no reason to guess at one, which turns fragmentation from something the server rejects after the fact into something the client does not attempt. Projects created after the server started are not in that list — `tix_projects` answers live.
 
-Each tool returns compact JSON (both as structured content and as its text representation) rather than the CLI's human-formatted, colorized output.
+## Replies are one block of plain text
+
+Each tool returns a single text block in the CLI's formatting — `78 [P1] title` for a listing, `78 [P1] title (open, tix)` plus the body for one ticket, `tix open=5 total=5` per project — and nothing else.
+
+It used to return the whole payload as JSON *twice*, once as the text block and once as `structuredContent`, with a generated `outputSchema` on every tool to describe it. Nothing consumed the structured half, and the schemas sat in context for the entire session. Dropping both, measured against this repo's own backlog:
+
+| | Before | After |
+| --- | --- | --- |
+| `tools/list` + instructions (every session) | 6,052 bytes ≈ 1,354 tokens | **3,955 bytes ≈ 869 tokens** |
+| `tix_list`, 5 tickets | 1,440 bytes | **328 bytes** |
+| `tix_show` | 348 bytes | **120 bytes** |
+| `tix_projects` | 236 bytes | **57 bytes** |
+
+Ids print bare rather than with the CLI's project prefix: these tools take an integer `id`, so `78` is what a client can hand back to `tix_show`, and `ti-78` is not. A client that genuinely needs to parse replies should use the CLI's `--json`, which is still there for programs.
 
 ## Register with Claude Desktop
 
