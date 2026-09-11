@@ -151,6 +151,52 @@ check "next has no open tickets left" "no open tickets" "$tmp/tix" next --projec
 
 check "claimed ticket appears with all tickets" "refactor parser" "$tmp/tix" list --project zen --all
 
+# concurrency: parallel agents share one database file, so every process must
+# get through instead of failing with SQLITE_BUSY, and no ticket may be claimed
+# twice
+parallel=8
+for i in $(seq 1 "$parallel"); do
+  "$tmp/tix" add --project par "parallel ticket $i" --body "body $i" >/dev/null
+done
+
+for i in $(seq 1 "$parallel"); do
+  "$tmp/tix" claim-next --project par --json --compact --fields id >"$tmp/claim.$i.out" 2>&1 &
+done
+wait
+
+claimed=$(cat "$tmp"/claim.*.out)
+distinct=$(sort -u <<<"$claimed" | grep -c '^{"id":[0-9]*}$' || true)
+if [[ "$distinct" -eq "$parallel" ]]; then
+  echo "ok: $parallel parallel claims each returned a distinct ticket"
+  pass=$((pass + 1))
+else
+  echo "FAIL: $parallel parallel claims each returned a distinct ticket" >&2
+  echo "  distinct successful claims: $distinct" >&2
+  echo "  got:" >&2
+  echo "$claimed" >&2
+  exit 1
+fi
+
+for i in $(seq 1 "$parallel"); do
+  "$tmp/tix" add --project par "parallel add $i" --body "body" >"$tmp/add.$i.out" 2>&1 &
+done
+wait
+
+added=$(cat "$tmp"/add.*.out)
+added_ok=$(grep -c '^#[0-9]* ' <<<"$added" || true)
+if [[ "$added_ok" -eq "$parallel" ]]; then
+  echo "ok: $parallel parallel adds all succeeded"
+  pass=$((pass + 1))
+else
+  echo "FAIL: $parallel parallel adds all succeeded" >&2
+  echo "  successful adds: $added_ok" >&2
+  echo "  got:" >&2
+  echo "$added" >&2
+  exit 1
+fi
+
+check_absent "parallel commands never report a locked database" "database is locked" cat "$tmp"/claim.*.out "$tmp"/add.*.out
+
 # graceful failures
 check_status "init-agent without project exits non-zero" 1 "$tmp/tix" init-agent
 check "list requires --project" 'required flag(s) "project" not set' "$tmp/tix" list
