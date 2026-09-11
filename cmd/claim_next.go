@@ -1,6 +1,3 @@
-/*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
@@ -10,7 +7,6 @@ import (
 	"github.com/waygatetech/tix/internal/tix"
 )
 
-// claimNextCmd represents the claim-next command
 var claimNextCmd = &cobra.Command{
 	Use:   "claim-next",
 	Short: "Claim the next open ticket",

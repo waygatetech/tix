@@ -1,6 +1,3 @@
-/*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
@@ -17,7 +14,6 @@ var projectsJSONOutput bool
 var projectKey string
 var projectRepoPath string
 
-// projectsCmd represents the projects command
 var projectsCmd = &cobra.Command{
 	Use:   "projects",
 	Short: "List all projects",

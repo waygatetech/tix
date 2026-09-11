@@ -1,6 +1,3 @@
-/*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
@@ -20,7 +17,6 @@ const (
 
 var agentDBPath string
 
-// initAgentCmd represents the init-agent command
 var initAgentCmd = &cobra.Command{
 	Use:   "init-agent PROJECT",
 	Short: "Add Tix workflow guidance to agent files",

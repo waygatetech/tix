@@ -1,6 +1,3 @@
-/*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
@@ -21,7 +18,6 @@ var (
 	editProject  string
 )
 
-// editCmd represents the edit command
 var editCmd = &cobra.Command{
 	Use:   "edit [id]",
 	Short: "Edit a ticket's fields",

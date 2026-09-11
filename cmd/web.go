@@ -1,6 +1,3 @@
-/*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
@@ -15,7 +12,6 @@ import (
 
 var webPort int
 
-// webCmd represents the web command
 var webCmd = &cobra.Command{
 	Use:   "web",
 	Short: "Serve a web view of tickets grouped by project",

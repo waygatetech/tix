@@ -1,6 +1,3 @@
-/*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
@@ -9,7 +6,6 @@ import (
 	tixmcp "github.com/waygatetech/tix/mcp"
 )
 
-// mcpCmd represents the mcp command
 var mcpCmd = &cobra.Command{
 	Use:   "mcp",
 	Short: "Run an MCP server exposing tix ticket operations over stdio",

@@ -1,6 +1,3 @@
-/*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
@@ -10,7 +7,6 @@ import (
 	"github.com/waygatetech/tix/internal/tix"
 )
 
-// showCmd represents the show command
 var showCmd = &cobra.Command{
 	Use:   "show [id]",
 	Short: "Show a ticket",

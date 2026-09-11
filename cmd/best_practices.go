@@ -1,6 +1,3 @@
-/*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
@@ -31,7 +28,6 @@ var guide = bestPracticesGuide{
 	},
 }
 
-// bestPracticesCmd represents the best-practices command
 var bestPracticesCmd = &cobra.Command{
 	Use:     "best-practices",
 	Aliases: []string{"agent-guide"},
