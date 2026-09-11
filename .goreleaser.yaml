@@ -24,6 +24,13 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
+    # Listing files replaces GoReleaser's defaults, which cover LICENSE and
+    # README but not NOTICE. Apache-2.0 section 4(d) expects NOTICE to travel
+    # with the distribution.
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
 
 checksum:
   name_template: "checksums.txt"
