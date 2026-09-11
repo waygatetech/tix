@@ -9,6 +9,10 @@
 
 No server, no account, no config file — just a single binary and a SQLite file.
 
+Because every project lives in one database, `tix web` can show all of them at once — the view a tracker that lives inside a single repository cannot give you:
+
+![The tix dashboard: four projects on one page, with ticket counts, filters, and per-project progress](docs/dashboard.png)
+
 ## Install
 
 ### Prebuilt binary (no Go required)
@@ -85,6 +89,7 @@ tix done 1
 - `tix done [id]` — mark a ticket done.
 - `tix rm [id] --project NAME` — remove a ticket from a project.
 - `tix prefix [project] [prefix]` — show ticket ID prefixes, or pin one for a project.
+- `tix web [--port N]` — serve the cross-project dashboard at `http://localhost:8080`.
 - `tix best-practices [--json] [--compact] [--fields FIELDS]` — print terse workflow guidance, handy for scripting or onboarding an AI agent.
 - `tix mcp` — run an MCP server on stdio exposing the ticket operations as tools, for MCP clients like Claude Desktop. See [mcp/README.md](mcp/README.md).
 - `tix init-agent PROJECT [--db PATH]` — append idempotent `tix` workflow guidance to `AGENTS.md` and `CLAUDE.md` at the current Git repository root (or the current directory), so coding agents know how to use `tix` in this repo.
@@ -136,6 +141,31 @@ Prefixes are derived from project names automatically — the shortest unique lo
 tix prefix              # list every project's prefix
 tix prefix frontend fe  # pin it
 ```
+
+### The dashboard
+
+`tix web` serves one page showing every project's backlog at once:
+
+```sh
+tix web            # http://localhost:8080
+tix web --port 9000
+```
+
+It reads the same database the CLI writes, so it needs no setup and nothing to keep in sync. The page gives you:
+
+- **Rollups across every repo** — open, in progress and done counts for the whole database, with per-project counts and a progress bar on each card. Projects with no tickets yet still appear, because an empty backlog is information too.
+- **Filtering** — search titles and bodies, narrow to one project, and toggle status and priority. Finished tickets are hidden until you ask for them, and sink to the bottom of their project when you do. Filters live in the URL, so a filtered view is a link you can keep.
+- **Ticket bodies** — click any row to expand the full body underneath it.
+- **Dark mode** — follows the system setting, with a toggle that overrides it.
+- **A staleness check** — a tab left open notices when a CLI command changes the backlog and offers to reload.
+
+The same view is available as JSON at `/api/dashboard`:
+
+```sh
+curl -s localhost:8080/api/dashboard | jq '.status_counts'
+```
+
+The server binds to `localhost` and never writes: it is a window onto your own database, not a shared tracker, so there is nothing to authenticate. Filing and closing tickets stays in the CLI.
 
 ### JSON output
 

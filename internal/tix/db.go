@@ -17,6 +17,12 @@ func dbPath() string {
 	return filepath.Join(home, ".tix", "tix.db")
 }
 
+// DBPath is the database file commands read and write, so a caller can tell a
+// reader which backlog they are looking at.
+func DBPath() string {
+	return dbPath()
+}
+
 // InitDB opens the database and brings its schema up to date. It reports
 // failures instead of exiting so callers that only meant to open the database
 // on the way to real work can surface the error themselves.

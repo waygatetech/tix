@@ -317,6 +317,40 @@ check "an explicit --project overrides the directory" "sandbox ticket" bash -c "
 check "set-repo-path registers a project created earlier" "zen $tmp/zen-repo" bash -c "mkdir -p '$tmp/zen-repo' && '$tmp/tix' projects set-repo-path zen '$tmp/zen-repo'"
 check "a project registered later infers too" "refactor parser" bash -c "cd '$tmp/zen-repo' && '$tmp/tix' list --all"
 
+# web: the dashboard is the one view that needs every project at once, and its
+# page is a template the compiler cannot check, so serve it for real and look
+web_port=$((20000 + RANDOM % 20000))
+"$tmp/tix" web --port "$web_port" >"$tmp/web.log" 2>&1 &
+web_pid=$!
+trap 'kill "$web_pid" 2>/dev/null || true; rm -rf "$tmp" 2>/dev/null || true' EXIT
+
+web_up=""
+for _ in $(seq 1 50); do
+  if curl -fsS "http://localhost:$web_port/" >"$tmp/web.html" 2>/dev/null; then
+    web_up=yes
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$web_up" ]]; then
+  echo "FAIL: web server never came up on port $web_port" >&2
+  cat "$tmp/web.log" >&2
+  exit 1
+fi
+
+check "web serves a page" "<title>tix" cat "$tmp/web.html"
+check "web shows tickets from one project" "refactor parser" cat "$tmp/web.html"
+check "web shows tickets from another project in the same page" "sandbox ticket" cat "$tmp/web.html"
+check "web displays prefixed ticket ids" "inf-" cat "$tmp/web.html"
+check "web shows where a project's code lives" "$repo" cat "$tmp/web.html"
+check "web api serves the same view as json" '"status_counts"' curl -fsS "http://localhost:$web_port/api/dashboard"
+check "web api includes prefixed refs" '"ref"' curl -fsS "http://localhost:$web_port/api/dashboard"
+check_status "web 404s on an unknown path" 22 curl -fsS "http://localhost:$web_port/nope"
+
+kill "$web_pid" 2>/dev/null || true
+wait "$web_pid" 2>/dev/null || true
+trap 'rm -rf "$tmp" 2>/dev/null || true' EXIT
+
 # graceful failures
 check_status "init-agent without project exits non-zero" 1 "$tmp/tix" init-agent
 check "list outside a registered repo still needs --project" "no project's repo path contains" "$tmp/tix" list

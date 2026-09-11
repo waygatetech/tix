@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tix — {{.Total}} tickets across {{len .Projects}} projects</title>
+<script>
+  // Applied before the first paint so a dark-mode reader never sees a white flash.
+  try {
+    var saved = localStorage.getItem("tix-theme");
+    if (saved) document.documentElement.dataset.theme = saved;
+  } catch (e) {}
+</script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --panel-alt: #fafbfc;
+    --border: #e4e7eb;
+    --text: #16191d;
+    --muted: #6b7280;
+    --faint: #9aa1ab;
+    --accent: #2563eb;
+    --accent-soft: #e8efff;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .1);
+    --open-bg: #dbeafe; --open-fg: #1e40af;
+    --prog-bg: #fef3c7; --prog-fg: #92400e;
+    --done-bg: #dcfce7; --done-fg: #166534;
+    --other-bg: #ececf1; --other-fg: #43464d;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-alt: #1b212a;
+    --border: #272e38;
+    --text: #e7eaee;
+    --muted: #99a1ad;
+    --faint: #6d7682;
+    --accent: #5b8cff;
+    --accent-soft: #1c2640;
+    --shadow: none;
+    --open-bg: #1b2c50; --open-fg: #a8c4ff;
+    --prog-bg: #3d2f10; --prog-fg: #f3ce72;
+    --done-bg: #15321f; --done-fg: #7fd09a;
+    --other-bg: #262b33; --other-fg: #aab1bc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0e1116;
+      --panel: #161b22;
+      --panel-alt: #1b212a;
+      --border: #272e38;
+      --text: #e7eaee;
+      --muted: #99a1ad;
+      --faint: #6d7682;
+      --accent: #5b8cff;
+      --accent-soft: #1c2640;
+      --shadow: none;
+      --open-bg: #1b2c50; --open-fg: #a8c4ff;
+      --prog-bg: #3d2f10; --prog-fg: #f3ce72;
+      --done-bg: #15321f; --done-fg: #7fd09a;
+      --other-bg: #262b33; --other-fg: #aab1bc;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2rem 1.25rem 4rem;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  a { color: var(--accent); }
+
+  /* Header */
+  .top { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 1.5rem; }
+  .top h1 { margin: 0; font-size: 1.5rem; letter-spacing: -.02em; }
+  .top h1 .dot { color: var(--accent); }
+  .top p { margin: .2rem 0 0; color: var(--muted); }
+  .top .spacer { flex: 1; }
+  .ghost {
+    font: inherit; cursor: pointer; color: var(--muted);
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 7px; padding: .4rem .7rem;
+  }
+  .ghost:hover { color: var(--text); border-color: var(--faint); }
+
+  /* Rollup tiles */
+  .rollup { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: .75rem; margin-bottom: 1.25rem; }
+  .tile {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: .8rem .9rem; box-shadow: var(--shadow); text-align: left;
+    font: inherit; color: inherit; cursor: pointer;
+  }
+  .tile:hover { border-color: var(--faint); }
+  .tile .n { font-size: 1.6rem; font-weight: 650; letter-spacing: -.03em; line-height: 1.1; }
+  .tile .k { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; }
+  .tile.total { cursor: default; }
+  .tile.total:hover { border-color: var(--border); }
+
+  /* Filters */
+  .filters {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: .7rem .8rem; margin-bottom: 1.25rem; box-shadow: var(--shadow);
+  }
+  .filters input[type="search"], .filters select {
+    font: inherit; color: var(--text); background: var(--panel-alt);
+    border: 1px solid var(--border); border-radius: 7px; padding: .4rem .6rem;
+  }
+  .filters input[type="search"] { flex: 1 1 220px; min-width: 0; }
+  .filters input[type="search"]:focus, .filters select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+  .chip {
+    font: inherit; font-size: .82rem; cursor: pointer;
+    background: var(--panel-alt); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 999px; padding: .25rem .65rem;
+  }
+  .chip:hover { color: var(--text); }
+  .chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .count { color: var(--faint); font-size: .82rem; margin-left: auto; white-space: nowrap; }
+
+  /* Project cards */
+  .project {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    margin-bottom: 1rem; overflow: hidden; box-shadow: var(--shadow);
+  }
+  .project > header { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; padding: .8rem .95rem; border-bottom: 1px solid var(--border); }
+  .project h2 { margin: 0; font-size: 1rem; letter-spacing: -.01em; }
+  .key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .72rem; text-transform: uppercase; color: var(--muted); background: var(--panel-alt); border: 1px solid var(--border); border-radius: 5px; padding: .05rem .35rem; }
+  .repo { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .76rem; color: var(--faint); }
+  .project header .spacer { flex: 1; }
+  .tallies { display: flex; gap: .4rem; font-size: .78rem; color: var(--muted); }
+  .bar { height: 3px; background: var(--border); }
+  .bar > span { display: block; height: 100%; background: var(--done-fg); }
+
+  table { width: 100%; border-collapse: collapse; }
+  tbody tr { border-bottom: 1px solid var(--border); }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr.ticket { cursor: pointer; }
+  tbody tr.ticket:hover { background: var(--panel-alt); }
+  td { padding: .5rem .95rem; vertical-align: baseline; }
+  td.ref { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; color: var(--muted); white-space: nowrap; width: 1%; }
+  td.pri { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; color: var(--muted); white-space: nowrap; width: 1%; }
+  td.state { width: 1%; white-space: nowrap; }
+  td.title { width: 100%; }
+  .ticket .caret { color: var(--faint); font-size: .7rem; margin-left: .4rem; }
+  .status { display: inline-block; padding: .1rem .5rem; border-radius: 5px; font-size: .75rem; font-weight: 600; }
+  .status-open { background: var(--open-bg); color: var(--open-fg); }
+  .status-in_progress { background: var(--prog-bg); color: var(--prog-fg); }
+  .status-done { background: var(--done-bg); color: var(--done-fg); }
+  .status-other { background: var(--other-bg); color: var(--other-fg); }
+  tr.done td.title { color: var(--faint); text-decoration: line-through; }
+  tr.body > td { padding: 0 .95rem .75rem; }
+  tr.body pre { margin: 0; white-space: pre-wrap; word-wrap: break-word; font: inherit; color: var(--muted); background: var(--panel-alt); border: 1px solid var(--border); border-radius: 7px; padding: .6rem .7rem; }
+  tr.body.nobody pre { font-style: italic; color: var(--faint); }
+
+  .blank { padding: 1.1rem .95rem; color: var(--faint); }
+  .empty { background: var(--panel); border: 1px dashed var(--border); border-radius: 10px; padding: 2rem; text-align: center; color: var(--muted); }
+  .empty pre { display: inline-block; text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; background: var(--panel-alt); border: 1px solid var(--border); border-radius: 7px; padding: .7rem .9rem; color: var(--text); }
+  footer { margin-top: 1.5rem; color: var(--faint); font-size: .8rem; }
+  footer code { font-size: .78rem; }
+
+  .banner {
+    position: fixed; left: 50%; bottom: 1.25rem; transform: translateX(-50%);
+    background: var(--accent); color: #fff; border: none; border-radius: 999px;
+    padding: .55rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
+    box-shadow: 0 4px 14px rgba(16, 24, 40, .25);
+  }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="top">
+  <div>
+    <h1>tix<span class="dot">.</span></h1>
+    <p id="tagline">
+      {{if .Total}}{{.Total}} ticket{{if ne .Total 1}}s{{end}} across {{len .Projects}} project{{if ne (len .Projects) 1}}s{{end}}{{else}}No tickets yet{{end}}
+    </p>
+  </div>
+  <div class="spacer"></div>
+  <button class="ghost" id="theme" type="button" aria-label="Toggle dark mode">Theme</button>
+</div>
+
+{{if .Projects}}
+<div class="rollup">
+  <button class="tile" type="button" data-only="open">
+    <div class="n">{{index .StatusCounts "open"}}</div>
+    <div class="k">Open</div>
+  </button>
+  <button class="tile" type="button" data-only="in_progress">
+    <div class="n">{{index .StatusCounts "in_progress"}}</div>
+    <div class="k">In progress</div>
+  </button>
+  <button class="tile" type="button" data-only="done">
+    <div class="n">{{index .StatusCounts "done"}}</div>
+    <div class="k">Done</div>
+  </button>
+  <div class="tile total">
+    <div class="n">{{len .Projects}}</div>
+    <div class="k">Projects</div>
+  </div>
+</div>
+
+<div class="filters">
+  <input type="search" id="q" placeholder="Search titles and bodies…" autocomplete="off" spellcheck="false">
+  <select id="project" aria-label="Filter by project">
+    <option value="">All projects</option>
+    {{range .Projects}}<option value="{{.Project}}">{{.Project}}</option>{{end}}
+  </select>
+  <div class="chips" id="statuses">
+    {{range .Statuses}}<button class="chip" type="button" data-status="{{.}}">{{. | label}}</button>{{end}}
+  </div>
+  <div class="chips" id="priorities">
+    {{range .Priorities}}<button class="chip" type="button" data-priority="{{.}}">P{{.}}</button>{{end}}
+  </div>
+  <button class="ghost" id="reset" type="button" hidden>Clear</button>
+  <span class="count" id="count"></span>
+</div>
+
+<main id="board">
+  {{range .Projects}}
+  <section class="project" data-project="{{.Project}}">
+    <header>
+      <h2>{{.Project}}</h2>
+      {{if .Key}}<span class="key">{{.Key}}</span>{{end}}
+      {{if .RepoPath}}<span class="repo">{{.RepoPath}}</span>{{end}}
+      <span class="spacer"></span>
+      <span class="tallies">
+        {{if .Open}}<span>{{.Open}} open</span>{{end}}
+        {{if .InProgress}}<span>· {{.InProgress}} in progress</span>{{end}}
+        {{if .Done}}<span>· {{.Done}} done</span>{{end}}
+        {{if not .Total}}<span>no tickets</span>{{end}}
+      </span>
+    </header>
+    <div class="bar" aria-hidden="true"><span style="width: {{.Percent}}%"></span></div>
+    {{if .Tickets}}
+    <table>
+      <tbody>
+        {{range .Tickets}}
+        <tr class="ticket{{if eq .Status "done"}} done{{end}}"
+            data-status="{{.Status}}"
+            data-priority="{{.Priority}}"
+            data-text="{{.Ref}} {{.Title}} {{.Body}}">
+          <td class="ref">{{.Ref}}</td>
+          <td class="pri">P{{.Priority}}</td>
+          <td class="state"><span class="status status-{{.Status | statusClass}}">{{.Status | label}}</span></td>
+          <td class="title">{{.Title}}<span class="caret">▸</span></td>
+        </tr>
+        <tr class="body{{if not .Body}} nobody{{end}}" hidden>
+          <td colspan="4"><pre>{{if .Body}}{{.Body}}{{else}}No body.{{end}}</pre></td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <p class="blank">No tickets yet — <code>tix add "first thing" --project {{.Project}}</code></p>
+    {{end}}
+  </section>
+  {{end}}
+  <p class="empty" id="nomatch" hidden>Nothing matches these filters.</p>
+</main>
+
+<footer>
+  Reading <code>{{.DBPath}}</code> · JSON at <a href="/api/dashboard">/api/dashboard</a>
+</footer>
+{{else}}
+<div class="empty">
+  <p>No projects yet. Create one along with its first ticket:</p>
+  <pre>tix add "the first thing" --project myapp --create</pre>
+</div>
+{{end}}
+
+</div>
+
+<button class="banner" id="banner" type="button" hidden>Backlog changed — reload</button>
+
+<script>
+(function () {
+  var root = document.documentElement;
+
+  document.getElementById("theme").addEventListener("click", function () {
+    var dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    var current = root.dataset.theme || (dark ? "dark" : "light");
+    var next = current === "dark" ? "light" : "dark";
+    root.dataset.theme = next;
+    try { localStorage.setItem("tix-theme", next); } catch (e) {}
+  });
+
+  var board = document.getElementById("board");
+  if (!board) return;
+
+  var q = document.getElementById("q");
+  var projectSelect = document.getElementById("project");
+  var statusChips = [].slice.call(document.querySelectorAll("#statuses .chip"));
+  var priorityChips = [].slice.call(document.querySelectorAll("#priorities .chip"));
+  var reset = document.getElementById("reset");
+  var count = document.getElementById("count");
+  var nomatch = document.getElementById("nomatch");
+  var sections = [].slice.call(board.querySelectorAll(".project"));
+  var rows = [].slice.call(board.querySelectorAll("tr.ticket"));
+
+  // Finished work is hidden until asked for: the dashboard is about what is
+  // left, and a long done list would bury it.
+  var defaultStatuses = statusChips
+    .map(function (chip) { return chip.dataset.status; })
+    .filter(function (status) { return status !== "done"; });
+
+  function pressed(chips) {
+    return chips.filter(function (chip) { return chip.getAttribute("aria-pressed") === "true"; })
+      .map(function (chip) { return chip.dataset.status || chip.dataset.priority; });
+  }
+
+  function press(chips, values) {
+    chips.forEach(function (chip) {
+      var value = chip.dataset.status || chip.dataset.priority;
+      chip.setAttribute("aria-pressed", values.indexOf(value) !== -1 ? "true" : "false");
+    });
+  }
+
+  function apply(push) {
+    var text = q.value.trim().toLowerCase();
+    var project = projectSelect.value;
+    var statuses = pressed(statusChips);
+    var priorities = pressed(priorityChips);
+    var shown = 0;
+
+    rows.forEach(function (row) {
+      var hit =
+        (!statuses.length || statuses.indexOf(row.dataset.status) !== -1) &&
+        (!priorities.length || priorities.indexOf(row.dataset.priority) !== -1) &&
+        (!text || row.dataset.text.toLowerCase().indexOf(text) !== -1);
+      row.hidden = !hit;
+      // Collapse a hidden row's body so it cannot reappear detached from it.
+      if (!hit) row.nextElementSibling.hidden = true;
+      if (hit) shown++;
+    });
+
+    // The default status selection is the resting state, not a filter someone
+    // typed, so a project with no tickets still shows up on first load.
+    var narrowed = !!text || priorities.length > 0 ||
+      statuses.join() !== defaultStatuses.join();
+
+    sections.forEach(function (section) {
+      var matchesProject = !project || section.dataset.project === project;
+      var hasRows = !!section.querySelector("tr.ticket:not([hidden])");
+      // An empty project stays visible until something is actually being
+      // filtered, because "this repo has no tickets" is part of the picture.
+      var isEmpty = !section.querySelector("tr.ticket");
+      section.hidden = !matchesProject || !(hasRows || (isEmpty && !narrowed));
+    });
+
+    var visibleProjects = sections.filter(function (s) { return !s.hidden; }).length;
+    if (project) {
+      shown = rows.filter(function (row) {
+        return !row.hidden && row.closest(".project").dataset.project === project;
+      }).length;
+    }
+
+    count.textContent = shown + " of " + rows.length + " shown";
+    nomatch.hidden = visibleProjects > 0;
+
+    reset.hidden = !narrowed && !project;
+
+    if (push !== false) save(text, project, statuses, priorities);
+  }
+
+  // Filters live in the URL so a filtered view is a link you can keep.
+  function save(text, project, statuses, priorities) {
+    var params = new URLSearchParams();
+    if (text) params.set("q", text);
+    if (project) params.set("project", project);
+    if (statuses.join() !== defaultStatuses.join()) params.set("status", statuses.join(","));
+    if (priorities.length) params.set("priority", priorities.join(","));
+    var search = params.toString();
+    history.replaceState(null, "", search ? "?" + search : location.pathname);
+  }
+
+  function load() {
+    var params = new URLSearchParams(location.search);
+    q.value = params.get("q") || "";
+    var project = params.get("project") || "";
+    if ([].some.call(projectSelect.options, function (o) { return o.value === project; })) {
+      projectSelect.value = project;
+    }
+    var statuses = params.has("status")
+      ? params.get("status").split(",").filter(Boolean)
+      : defaultStatuses;
+    press(statusChips, statuses);
+    press(priorityChips, params.has("priority") ? params.get("priority").split(",") : []);
+  }
+
+  function toggle(chip) {
+    chip.setAttribute("aria-pressed", chip.getAttribute("aria-pressed") === "true" ? "false" : "true");
+    apply();
+  }
+
+  statusChips.concat(priorityChips).forEach(function (chip) {
+    chip.addEventListener("click", function () { toggle(chip); });
+  });
+  q.addEventListener("input", function () { apply(); });
+  projectSelect.addEventListener("change", function () { apply(); });
+  reset.addEventListener("click", function () {
+    q.value = "";
+    projectSelect.value = "";
+    press(statusChips, defaultStatuses);
+    press(priorityChips, []);
+    apply();
+  });
+
+  [].forEach.call(document.querySelectorAll(".tile[data-only]"), function (tile) {
+    tile.addEventListener("click", function () {
+      q.value = "";
+      projectSelect.value = "";
+      press(statusChips, [tile.dataset.only]);
+      press(priorityChips, []);
+      apply();
+    });
+  });
+
+  rows.forEach(function (row) {
+    row.addEventListener("click", function () {
+      var body = row.nextElementSibling;
+      body.hidden = !body.hidden;
+      row.querySelector(".caret").textContent = body.hidden ? "▸" : "▾";
+    });
+  });
+
+  load();
+  apply(false);
+
+  // A dashboard left open in a tab goes stale the moment a CLI command runs, so
+  // poll the JSON view and offer a reload when it no longer matches this page.
+  var banner = document.getElementById("banner");
+  var seen = null;
+  function poll() {
+    fetch("/api/dashboard", { cache: "no-store" })
+      .then(function (res) { return res.text(); })
+      .then(function (body) {
+        // The first response is the baseline this page was rendered from; it is
+        // taken right away so a change a second later is still noticed.
+        if (seen === null) { seen = body; return; }
+        if (body !== seen) banner.hidden = false;
+      })
+      .catch(function () {});
+  }
+  poll();
+  setInterval(poll, 5000);
+  banner.addEventListener("click", function () { location.reload(); });
+})();
+</script>
+</body>
+</html>
