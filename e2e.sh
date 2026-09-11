@@ -129,7 +129,8 @@ check "projects add rejects a variant of an existing project" 'already exists as
 check_status "projects add with a duplicate exits non-zero" 1 "$tmp/tix" projects add SANDBOX
 check_status "listing an empty project succeeds" 0 "$tmp/tix" list --project sandbox
 check "a pinned key prefixes the project's ticket ids" "sbx-6 [P2] sandbox ticket" "$tmp/tix" add --project sandbox "sandbox ticket" -b body
-check "best-practices shows agent loop" "claim-next --project NAME --json --compact" "$tmp/tix" best-practices
+check "best-practices shows agent loop" "claim-next --project NAME ->" "$tmp/tix" best-practices
+check "best-practices steers agents to plain text" "Output: plain text is the default" "$tmp/tix" best-practices
 check "agent-guide alias works" "Use: TIX_DB=.tix/tix.db tix" "$tmp/tix" agent-guide
 check "best-practices supports compact JSON" '{"use":"TIX_DB=.tix/tix.db tix",' "$tmp/tix" best-practices --json --compact
 check "best-practices supports JSON field selection" '{"use":"TIX_DB=.tix/tix.db tix"}' "$tmp/tix" best-practices --json --compact --fields use
@@ -145,7 +146,7 @@ else
   exit 1
 fi
 check "init-agent is idempotent" "unchanged $tmp/AGENTS.md" "$tmp/tix" init-agent acme
-for pair in "claim-next --project acme --json --compact:AGENTS.md" "# Existing:AGENTS.md" "TIX_DB=.tix/tix.db tix:CLAUDE.md"; do
+for pair in "tix claim-next --project acme\`:AGENTS.md" "# Existing:AGENTS.md" "TIX_DB=.tix/tix.db tix:CLAUDE.md"; do
   needle="${pair%%:*}"
   file="${pair##*:}"
   if grep -qF -- "$needle" "$file"; then

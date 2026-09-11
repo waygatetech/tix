@@ -146,6 +146,8 @@ tix list --project acme --json --fields id,title,priority
 tix show 1 --json --compact
 ```
 
+Reach for `--json` when a program parses the output. For reading — including by an AI agent — the default plain text is shorter than JSON for every command, even filtered and compacted.
+
 ### Using a custom database path
 
 Set `TIX_DB` to point `tix` at a specific SQLite file instead of the default `~/.tix/tix.db`:

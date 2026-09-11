@@ -10,22 +10,24 @@ type bestPracticesGuide struct {
 	Use      string   `json:"use"`
 	Loop     []string `json:"loop"`
 	Commands []string `json:"commands"`
+	Output   string   `json:"output"`
 }
 
 var guide = bestPracticesGuide{
 	Use: "TIX_DB=.tix/tix.db tix",
 	Loop: []string{
-		"claim-next --project NAME --json --compact --fields id,title,body",
+		"claim-next --project NAME",
 		"implement and verify",
 		"done ID",
 	},
 	Commands: []string{
-		"list --project NAME --status open --limit N --json --compact --fields id,title,priority,status",
-		"show ID --json --compact",
+		"list --project NAME --status open --limit N",
+		"show ID",
 		"add --project NAME --body-file PATH --priority N TITLE",
-		"projects --json --compact  # project names; --project must be one of them",
+		"projects  # project names; --project must be one of them",
 		"projects add NAME  # or add --create, for a project that does not exist yet",
 	},
+	Output: "plain text is the default and is shorter than JSON for every command; add --json (with --compact/--fields) only when a program parses the result",
 }
 
 var bestPracticesCmd = &cobra.Command{
@@ -42,6 +44,7 @@ var bestPracticesCmd = &cobra.Command{
 		for _, command := range guide.Commands {
 			fmt.Println(command)
 		}
+		fmt.Println("Output: " + guide.Output)
 		return nil
 	},
 }

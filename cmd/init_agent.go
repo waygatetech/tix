@@ -66,12 +66,13 @@ func tixWorkflowSection(project, dbPath string) string {
 
 Use `+"`TIX_DB=%s tix`"+`.
 
-- Start work with `+"`tix claim-next --project %s --json --compact --fields id,title,body`"+`.
-- Fetch full details only when needed with `+"`tix show ID --json --compact`"+`.
-- List narrow backlogs with `+"`tix list --project %s --status open --limit 10 --json --compact --fields id,title,priority,status`"+`.
+- Start work with `+"`tix claim-next --project %s`"+`.
+- Fetch full details only when needed with `+"`tix show ID`"+`.
+- List narrow backlogs with `+"`tix list --project %s --status open --limit 10`"+`.
 - Add follow-up tickets with `+"`tix add --project %s --body-file PATH --priority N TITLE`"+`.
 - After verification, close work with `+"`tix done ID`"+`.
 - Use the project name `+"`%s`"+` verbatim: an unknown `+"`--project`"+` is rejected, and a new project needs `+"`tix projects add NAME`"+` or `+"`--create`"+`.
+- Read the plain text output: it is shorter than JSON for every command. Add `+"`--json`"+` (with `+"`--compact`"+`/`+"`--fields`"+`) only when a program parses the result.
 
 %s
 `, tixWorkflowStart, dbPath, project, project, project, project, tixWorkflowEnd)
