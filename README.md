@@ -194,6 +194,25 @@ This is useful for keeping a project-local ticket database checked into a repo, 
 
 `tix` also ships an MCP server as the `tix mcp` subcommand, so agents like Claude Desktop can call ticket operations directly as tools instead of shelling out to the CLI. No extra binary to install — see [mcp/README.md](mcp/README.md).
 
+### Token cost: CLI vs. MCP
+
+The two paths do the same work, but they bill context very differently. An MCP server's tool schemas are loaded into the model's context at connection time and stay there for the whole session, whether or not a single ticket gets touched. The CLI costs nothing until it is called, because the shell is already a tool the agent has.
+
+Measured against the current tool set:
+
+| Path | Permanent context | Measured size |
+| --- | --- | --- |
+| `tix mcp` | 6 tool schemas + server instructions | 6,042 bytes ≈ **1,300 tokens**, every session |
+| `tix` CLI | none | **0 tokens** |
+| `tix init-agent` block | guidance in `AGENTS.md` / `CLAUDE.md` | 726 bytes ≈ **200 tokens**, only for agents that read those files |
+| `tix best-practices` | printed on demand | 488 bytes ≈ **120 tokens**, only when the agent asks |
+
+So the CLI path costs roughly 200 tokens for an agent that reads `AGENTS.md`, against about 1,300 tokens of standing overhead for the MCP path — and the CLI's cost is content the agent would need anyway, not schema.
+
+**Use the CLI when the agent has a shell.** It is the token-efficient default, and it is the whole command surface rather than the authoring subset the MCP server exposes. **Use MCP for clients without a shell**, such as Claude Desktop, where the schema cost buys the only available access.
+
+Token counts are from OpenAI's `o200k_base` tokenizer over the serialized `tools/list` payload; exact numbers vary by tokenizer and by how a client renders schemas into the prompt, but the order-of-magnitude gap is the point. Byte counts are exact and reproducible — `tix init-agent` writes the block measured above.
+
 ## Development
 
 ```sh
