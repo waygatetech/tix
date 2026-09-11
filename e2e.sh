@@ -112,6 +112,20 @@ check "list filters by status" '"status":"open"' "$tmp/tix" list --project acme 
 check "list filters by priority" '"priority":0' "$tmp/tix" list --project acme --priority 0 --json --compact
 check "list limits results" '[{"id":2,' "$tmp/tix" list --project acme --limit 1 --json --compact
 check "list supports JSON field selection" '[{"id":2,"title":"write docs"}' "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,title
+
+# search is the duplicate check: it looks in the body as well as the title, so
+# a ticket whose subject only appears in its description still turns up
+check "search matches a title" "fix login bug" "$tmp/tix" search --project acme login
+check "search matches a body" "write docs" "$tmp/tix" search --project acme README
+check "search ignores case" "fix login bug" "$tmp/tix" search --project acme LOGIN
+check "search joins unquoted words into one term" "fix login bug" "$tmp/tix" search --project acme fix login
+check_absent "search stays inside the project" "refactor parser" "$tmp/tix" search --project acme parser
+check_absent "search treats wildcards literally" "write docs" "$tmp/tix" search --project acme '%'
+check "search supports JSON field selection" '[{"id":2,"title":"write docs"}' "$tmp/tix" search --project acme docs --json --compact --fields id,title
+check "search requires a term" "search term is required" "$tmp/tix" search --project acme
+check_status "search without a term exits non-zero" 1 "$tmp/tix" search --project acme
+check "search rejects an unknown project" 'unknown project "acmee"' "$tmp/tix" search --project acmee login
+
 check "projects lists acme counts" "acme (ac) open=2 total=2" "$tmp/tix" projects
 check "projects lists files counts" "files (fi) open=1 total=1" "$tmp/tix" projects
 check "projects lists zen counts" "zen (ze) open=1 total=1" "$tmp/tix" projects
@@ -221,6 +235,10 @@ check "rm removes a ticket" "ac-2 removed (acme: write docs)" "$tmp/tix" rm 2 --
 check "done marks a ticket" "ac-1 done (acme: fix login bug)" "$tmp/tix" done 1
 check_absent "list excludes done ticket" "ac-1" "$tmp/tix" list --project acme
 check "list --all shows done ticket" "x ac-1" "$tmp/tix" list --project acme -a
+# work that already shipped is still a duplicate, so search sees closed tickets
+# without being asked
+check "search finds a done ticket" "x ac-1" "$tmp/tix" search --project acme login
+check_absent "search narrows to a status on request" "ac-1" "$tmp/tix" search --project acme login --status open
 check "projects counts done tickets" "acme (ac) done=1 total=1" "$tmp/tix" projects
 check "next has no open tickets left" "no open tickets" "$tmp/tix" next --project acme
 

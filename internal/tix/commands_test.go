@@ -185,6 +185,114 @@ func TestListTicketsFilters(t *testing.T) {
 	}
 }
 
+// TestListTicketsQueryMatchesTitleAndBody covers the search filter: what it
+// looks in, what it ignores, and that it composes with the other filters rather
+// than replacing them.
+func TestListTicketsQueryMatchesTitleAndBody(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme", "zen")
+
+	for _, ticket := range []struct {
+		title, body string
+		project     string
+	}{
+		{"fix search timeout", "the query never returns", "acme"},
+		{"add tests", "cover the SEARCH path", "acme"},
+		{"unrelated", "nothing to see", "acme"},
+		{"search elsewhere", "another backlog", "zen"},
+	} {
+		if _, err := Add(ticket.title, ticket.body, 2, ticket.project); err != nil {
+			t.Fatalf("Add(%q): %v", ticket.title, err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		options ListOptions
+		want    []string
+	}{
+		{
+			name:    "matches title and body, ignoring case",
+			options: ListOptions{Project: "acme", Query: "search"},
+			want:    []string{"fix search timeout", "add tests"},
+		},
+		{
+			name:    "stays inside the project",
+			options: ListOptions{Project: "zen", Query: "search"},
+			want:    []string{"search elsewhere"},
+		},
+		{
+			name:    "composes with the other filters",
+			options: ListOptions{Project: "acme", Query: "search", Limit: 1},
+			want:    []string{"fix search timeout"},
+		},
+		{
+			name:    "an empty query filters nothing",
+			options: ListOptions{Project: "acme", Query: "  "},
+			want:    []string{"fix search timeout", "add tests", "unrelated"},
+		},
+		{
+			// A wildcard is a character to look for, not a pattern: a query of
+			// "%" that matched everything would be worse than useless for the
+			// duplicate check this exists for.
+			name:    "wildcards are matched literally",
+			options: ListOptions{Project: "acme", Query: "%"},
+			want:    nil,
+		},
+		{
+			name:    "no match returns nothing",
+			options: ListOptions{Project: "acme", Query: "deploy"},
+			want:    nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tickets, err := ListTickets(tc.options)
+			if err != nil {
+				t.Fatalf("ListTickets: %v", err)
+			}
+			var got []string
+			for _, ticket := range tickets {
+				got = append(got, ticket.Title)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("titles = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestListTicketsQuerySeesDoneTickets keeps the status filter in charge of which
+// statuses a search covers: a caller asking for every status gets the done
+// ticket too, which is the one that says the work already happened.
+func TestListTicketsQuerySeesDoneTickets(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	id, err := Add("fix search timeout", "body", 2, "acme")
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := Done(int(id)); err != nil {
+		t.Fatalf("Done(%d): %v", id, err)
+	}
+
+	open, err := ListTickets(ListOptions{Project: "acme", Query: "search"})
+	if err != nil {
+		t.Fatalf("ListTickets: %v", err)
+	}
+	if len(open) != 0 {
+		t.Errorf("default search = %#v, want the done ticket hidden", open)
+	}
+
+	all, err := ListTickets(ListOptions{Project: "acme", Query: "search", ShowAll: true})
+	if err != nil {
+		t.Fatalf("ListTickets showing all: %v", err)
+	}
+	if len(all) != 1 || all[0].ID != int(id) {
+		t.Errorf("search over all statuses = %#v, want ticket %d", all, id)
+	}
+}
+
 func TestShowReturnsTicketByID(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")

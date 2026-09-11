@@ -23,6 +23,7 @@ var guide = bestPracticesGuide{
 	Commands: []string{
 		"list --project NAME --status open --limit N",
 		"show ID",
+		"search --project NAME TERM  # title and body, every status; check before adding",
 		"add --project NAME --body-file PATH --priority N TITLE",
 		"projects  # project names; --project must be one of them",
 		"projects add NAME  # or add --create, for a project that does not exist yet",

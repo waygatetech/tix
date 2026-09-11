@@ -36,20 +36,25 @@ var listCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("query failed: %w", err)
 		}
-		prefixes, err := tix.Prefixes()
-		if err != nil {
-			return err
-		}
-		for _, ticket := range tickets {
-			marker := ""
-			if ticket.Status == "done" {
-				marker = "x "
-			}
-			fmt.Printf("%s%s [P%d] %s\n",
-				marker, tix.FormatID(prefixes[ticket.Project], ticket.ID), ticket.Priority, ticket.Title)
-		}
-		return nil
+		return printTickets(tickets)
 	},
+}
+
+// printTickets writes the one-line form every ticket listing shares.
+func printTickets(tickets []tix.Ticket) error {
+	prefixes, err := tix.Prefixes()
+	if err != nil {
+		return err
+	}
+	for _, ticket := range tickets {
+		marker := ""
+		if ticket.Status == "done" {
+			marker = "x "
+		}
+		fmt.Printf("%s%s [P%d] %s\n",
+			marker, tix.FormatID(prefixes[ticket.Project], ticket.ID), ticket.Priority, ticket.Title)
+	}
+	return nil
 }
 
 func init() {

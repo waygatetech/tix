@@ -65,6 +65,9 @@ tix add --project acme "investigate search timeout" --body-file ./notes.md
 # see what's outstanding
 tix list --project acme
 
+# check whether a ticket already covers something before filing another
+tix search --project acme timeout
+
 # see what to work on next
 tix next --project acme
 
@@ -79,6 +82,7 @@ tix done 1
 
 - `tix add [title] --project NAME (--body TEXT | --body-file PATH) [--priority N] [--create]` — add a ticket. Priority defaults to `2`; lower numbers are higher priority (`P0` is most urgent). `--create` makes the project when it does not exist yet.
 - `tix list --project NAME [--all] [--status STATUS] [--priority N] [--limit N] [--json] [--compact] [--fields FIELDS]` — list tickets for a project. Done tickets are hidden unless `--all` is set.
+- `tix search TERM --project NAME [--status STATUS] [--priority N] [--limit N] [--json] [--compact] [--fields FIELDS]` — find a project's tickets whose title or body contains `TERM`. Matching ignores case and is a plain substring match, so `%` and `_` are searched for literally. Every status is searched, done included — work that already shipped is as much a duplicate as an open ticket — so narrow with `--status open` when only the live backlog matters.
 - `tix next --project NAME [--json] [--compact] [--fields FIELDS]` — show the highest-priority open ticket for a project.
 - `tix claim-next --project NAME [--json] [--compact] [--fields FIELDS]` — mark the highest-priority open ticket `in_progress` and print it.
 - `tix show [id] [--project NAME] [--json] [--compact] [--fields FIELDS]` — show full details for one ticket. `--project` is optional and asserts which project the ticket belongs to: a mismatch is an error.

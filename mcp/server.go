@@ -46,6 +46,13 @@ func NewServer(version string) *mcp.Server {
 	}, listTool)
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name: "tix_search",
+		Description: "Search a project's tickets for a term in the title or body. " +
+			"Use this before filing a ticket to check whether one already covers " +
+			"the same work.",
+	}, searchTool)
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tix_show",
 		Description: "Show a single ticket by id.",
 	}, showTool)
@@ -266,6 +273,11 @@ func listTool(_ context.Context, _ *mcp.CallToolRequest, args listArgs) (*mcp.Ca
 	if len(tickets) == 0 {
 		return textResult("no tickets"), nil, nil
 	}
+	return textResult(ticketLines(tickets)), nil, nil
+}
+
+// ticketLines renders a set of tickets one per line, the way the CLI does.
+func ticketLines(tickets []tix.Ticket) string {
 	lines := make([]string, len(tickets))
 	for i, t := range tickets {
 		// Done tickets are marked the way the CLI marks them, since a list that
@@ -276,7 +288,47 @@ func listTool(_ context.Context, _ *mcp.CallToolRequest, args listArgs) (*mcp.Ca
 		}
 		lines[i] = marker + ticketLine(t.ID, t.Priority, t.Title)
 	}
-	return textResult(strings.Join(lines, "\n")), nil, nil
+	return strings.Join(lines, "\n")
+}
+
+type searchArgs struct {
+	Project  string `json:"project" jsonschema:"the project to search tickets in"`
+	Query    string `json:"query" jsonschema:"the term to look for in ticket titles and bodies; matching ignores case and is a plain substring match"`
+	Status   string `json:"status,omitempty" jsonschema:"limit the search to one status (e.g. open, in_progress, done); by default every status is searched"`
+	Priority *int   `json:"priority,omitempty" jsonschema:"filter by exact priority"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"limit the number of tickets returned (0 = no limit)"`
+}
+
+func searchTool(_ context.Context, _ *mcp.CallToolRequest, args searchArgs) (*mcp.CallToolResult, any, error) {
+	if args.Project == "" {
+		return nil, nil, fmt.Errorf("project is required")
+	}
+	if strings.TrimSpace(args.Query) == "" {
+		return nil, nil, fmt.Errorf("query is required")
+	}
+	if args.Limit < 0 {
+		return nil, nil, fmt.Errorf("limit must be >= 0")
+	}
+	tickets, err := tix.ListTickets(tix.ListOptions{
+		Project: args.Project,
+		// Done tickets are searched too: work that already shipped makes a new
+		// ticket just as duplicate as an open one does, and checking for
+		// duplicates is what this tool is for.
+		ShowAll:  true,
+		Status:   args.Status,
+		Query:    args.Query,
+		Priority: args.Priority,
+		Limit:    args.Limit,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("search failed: %w", err)
+	}
+	// The term is echoed because an empty result is the answer a caller acts on,
+	// and it should be obvious which spelling produced it.
+	if len(tickets) == 0 {
+		return textResult(fmt.Sprintf("no tickets matching %q", args.Query)), nil, nil
+	}
+	return textResult(ticketLines(tickets)), nil, nil
 }
 
 type showArgs struct {

@@ -13,9 +13,12 @@ It calls the same `internal/tix` library functions the CLI uses, and talks to th
 | `tix_add`        | Create a new ticket in an existing project (`create: true` makes a new one). |
 | `tix_add_batch`  | Create several tickets in one project in a single call.            |
 | `tix_list`       | List tickets in a project, optionally filtered by status/priority. |
+| `tix_search`     | Find a project's tickets by a term in the title or body.           |
 | `tix_show`       | Show a single ticket by id.                                        |
 | `tix_edit`       | Edit fields of an existing ticket.                                 |
 | `tix_projects`   | List all projects with ticket counts per status.                   |
+
+`tix_search` is the one to reach for before filing: past about fifty tickets, nobody — least of all a client that files independently of whoever works the backlog — can hold the list in their head, and a duplicate costs more to notice later than the call costs now. It searches every status, because work that already shipped makes a new ticket just as redundant as an open one does.
 
 That is the authoring half of the workflow and nothing else: write a ticket down, read it back, correct it. Claiming and closing belong to whoever does the work, so `claim-next`, `done`, and `rm` stay on the CLI — a client here would otherwise be able to close tickets it never touched. `tix_edit` can still set a status when a ticket genuinely needs one changed by hand, and it covers re-prioritizing too, which is why there is no separate `bump` tool.
 

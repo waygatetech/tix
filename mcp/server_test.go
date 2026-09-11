@@ -455,6 +455,68 @@ func TestListFiltersAndLimits(t *testing.T) {
 	}
 }
 
+// TestSearchToolFindsTicketsInAnyStatus covers what a client calls before
+// filing: a ticket that already covers the work has to turn up whether it is
+// open or long since closed.
+func TestSearchToolFindsTicketsInAnyStatus(t *testing.T) {
+	setupTestDB(t)
+
+	ctx := context.Background()
+	if _, _, err := addBatchTool(ctx, nil, addBatchArgs{
+		Project: "acme",
+		Create:  true,
+		Tickets: []batchTicket{
+			{Title: "add tix search", Body: "LIKE across title and body", Priority: ptr(1)},
+			{Title: "ship the dashboard", Body: "cross-repo search page", Priority: ptr(2)},
+			{Title: "unrelated", Body: "nothing to see", Priority: ptr(3)},
+		},
+	}); err != nil {
+		t.Fatalf("addBatchTool: %v", err)
+	}
+	done := "done"
+	if _, _, err := editTool(ctx, nil, editArgs{ID: 2, Status: &done}); err != nil {
+		t.Fatalf("editTool: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args searchArgs
+		want string
+	}{
+		{
+			// The closed ticket is the point: it says the work already happened.
+			name: "title and body, every status",
+			args: searchArgs{Project: "acme", Query: "search"},
+			want: "1 [P1] add tix search\nx 2 [P2] ship the dashboard",
+		},
+		{
+			name: "narrowed by status",
+			args: searchArgs{Project: "acme", Query: "search", Status: "open"},
+			want: "1 [P1] add tix search",
+		},
+		{
+			name: "narrowed by priority and limit",
+			args: searchArgs{Project: "acme", Query: "search", Priority: ptr(2), Limit: 1},
+			want: "x 2 [P2] ship the dashboard",
+		},
+		{
+			name: "nothing found names the term",
+			args: searchArgs{Project: "acme", Query: "deploy"},
+			want: `no tickets matching "deploy"`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, _, err := searchTool(ctx, nil, tc.args)
+			if err != nil {
+				t.Fatalf("searchTool: %v", err)
+			}
+			if got := resultText(t, res); got != tc.want {
+				t.Errorf("search reply = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestToolsRejectBadArguments(t *testing.T) {
 	setupTestDB(t)
 
@@ -481,6 +543,29 @@ func TestToolsRejectBadArguments(t *testing.T) {
 			name: "list with a negative limit",
 			call: func() error {
 				_, _, err := listTool(ctx, nil, listArgs{Project: "acme", Limit: -1})
+				return err
+			},
+			want: "limit must be >= 0",
+		},
+		{
+			name: "search with no project",
+			call: func() error { _, _, err := searchTool(ctx, nil, searchArgs{Query: "x"}); return err },
+			want: "project is required",
+		},
+		{
+			// A blank query would match every ticket in the project, which is
+			// tix_list wearing a different name and not what the caller asked.
+			name: "search with a blank query",
+			call: func() error {
+				_, _, err := searchTool(ctx, nil, searchArgs{Project: "acme", Query: " "})
+				return err
+			},
+			want: "query is required",
+		},
+		{
+			name: "search with a negative limit",
+			call: func() error {
+				_, _, err := searchTool(ctx, nil, searchArgs{Project: "acme", Query: "x", Limit: -1})
 				return err
 			},
 			want: "limit must be >= 0",

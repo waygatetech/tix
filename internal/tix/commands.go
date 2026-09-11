@@ -27,9 +27,12 @@ type ProjectSummary struct {
 }
 
 type ListOptions struct {
-	Project  string
-	ShowAll  bool
-	Status   string
+	Project string
+	ShowAll bool
+	Status  string
+	// Query keeps only tickets whose title or body contains it, ignoring case.
+	// An empty query filters nothing.
+	Query    string
 	Priority *int
 	Limit    int
 }
@@ -123,6 +126,11 @@ func ListTickets(options ListOptions) ([]Ticket, error) {
 		where = append(where, `priority = ?`)
 		args = append(args, *options.Priority)
 	}
+	if term := strings.TrimSpace(options.Query); term != "" {
+		where = append(where, `(title LIKE ? ESCAPE '\' OR body LIKE ? ESCAPE '\')`)
+		pattern := likePattern(term)
+		args = append(args, pattern, pattern)
+	}
 	query := `SELECT id, title, body, status, priority, project FROM tickets WHERE ` + strings.Join(where, ` AND `) + ` ORDER BY priority ASC, order_rank ASC`
 	if options.Limit > 0 {
 		query += ` LIMIT ?`
@@ -147,6 +155,17 @@ func ListTickets(options ListOptions) ([]Ticket, error) {
 		return nil, err
 	}
 	return tickets, nil
+}
+
+// likeEscaper neutralizes the wildcards a search term may contain, so looking
+// for "100%" or "order_rank" matches those characters instead of matching every
+// ticket. The escape character itself has to go first.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// likePattern turns a search term into the substring pattern ListTickets
+// compares against, paired with the ESCAPE clause in the query.
+func likePattern(term string) string {
+	return "%" + likeEscaper.Replace(term) + "%"
 }
 
 func Next(project string) (int, string, string, int, error) {
