@@ -1,6 +1,7 @@
 package tix
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -39,6 +40,32 @@ func newProjects(t *testing.T, names ...string) {
 			t.Fatalf("CreateProject(%q): %v", name, err)
 		}
 	}
+}
+
+// listLines renders a project's tickets the way the list command does, so tests
+// that care about ordering and prefixes can assert on one line per ticket.
+func listLines(t *testing.T, project string, showAll bool) []string {
+	t.Helper()
+
+	tickets, err := ListTickets(ListOptions{Project: project, ShowAll: showAll})
+	if err != nil {
+		t.Fatalf("ListTickets(%q, showAll=%v): %v", project, showAll, err)
+	}
+	prefixes, err := Prefixes()
+	if err != nil {
+		t.Fatalf("Prefixes(): %v", err)
+	}
+
+	var lines []string
+	for _, ticket := range tickets {
+		marker := ""
+		if ticket.Status == "done" {
+			marker = "x "
+		}
+		lines = append(lines, fmt.Sprintf("%s%s [P%d] %s",
+			marker, FormatID(prefixes[ticket.Project], ticket.ID), ticket.Priority, ticket.Title))
+	}
+	return lines
 }
 
 // stripTimestamps checks that a read populated the timestamps and then clears
@@ -99,27 +126,28 @@ func TestAddListNextAndProjectIsolation(t *testing.T) {
 		t.Fatalf("unexpected IDs: got %d, %d, %d", firstID, secondID, otherID)
 	}
 
-	got := List("acme", false)
+	got := listLines(t, "acme", false)
 	want := []string{
 		"ac-2 [P0] write docs",
 		"ac-1 [P2] fix login bug",
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("List(acme, false) = %#v, want %#v", got, want)
+		t.Fatalf("listLines(acme, false) = %#v, want %#v", got, want)
 	}
 
-	id, title, body, priority, err := Next("acme")
+	next, err := NextTicket("acme")
 	if err != nil {
-		t.Fatalf("Next(acme): %v", err)
+		t.Fatalf("NextTicket(acme): %v", err)
 	}
-	if id != 2 || title != "write docs" || body != "README" || priority != 0 {
-		t.Fatalf("Next(acme) = (%d, %q, %q, %d), want (2, %q, %q, 0)", id, title, body, priority, "write docs", "README")
+	if next.ID != 2 || next.Title != "write docs" || next.Body != "README" || next.Priority != 0 {
+		t.Fatalf("NextTicket(acme) = (%d, %q, %q, %d), want (2, %q, %q, 0)",
+			next.ID, next.Title, next.Body, next.Priority, "write docs", "README")
 	}
 
-	got = List("zen", false)
+	got = listLines(t, "zen", false)
 	want = []string{"ze-3 [P2] refactor parser"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("List(zen, false) = %#v, want %#v", got, want)
+		t.Fatalf("listLines(zen, false) = %#v, want %#v", got, want)
 	}
 }
 
@@ -140,32 +168,32 @@ func TestDoneFiltersOpenListAndNext(t *testing.T) {
 		t.Fatalf("Done(%d): %v", firstID, err)
 	}
 
-	got := List("acme", false)
+	got := listLines(t, "acme", false)
 	want := []string{"ac-2 [P2] second"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("List(acme, false) after Done = %#v, want %#v", got, want)
+		t.Fatalf("listLines(acme, false) after Done = %#v, want %#v", got, want)
 	}
 
-	got = List("acme", true)
+	got = listLines(t, "acme", true)
 	want = []string{"x ac-1 [P1] first", "ac-2 [P2] second"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("List(acme, true) after Done = %#v, want %#v", got, want)
+		t.Fatalf("listLines(acme, true) after Done = %#v, want %#v", got, want)
 	}
 
-	id, title, _, _, err := Next("acme")
+	next, err := NextTicket("acme")
 	if err != nil {
-		t.Fatalf("Next(acme): %v", err)
+		t.Fatalf("NextTicket(acme): %v", err)
 	}
-	if id != int(secondID) || title != "second" {
-		t.Fatalf("Next(acme) = (%d, %q, ...), want (%d, %q, ...)", id, title, secondID, "second")
+	if next.ID != int(secondID) || next.Title != "second" {
+		t.Fatalf("NextTicket(acme) = (%d, %q, ...), want (%d, %q, ...)", next.ID, next.Title, secondID, "second")
 	}
 
 	if err := Done(int(secondID)); err != nil {
 		t.Fatalf("Done(%d): %v", secondID, err)
 	}
-	_, _, _, _, err = Next("acme")
+	_, err = NextTicket("acme")
 	if err == nil || err.Error() != "no open tickets" {
-		t.Fatalf("Next(acme) after all done error = %v, want no open tickets", err)
+		t.Fatalf("NextTicket(acme) after all done error = %v, want no open tickets", err)
 	}
 }
 
@@ -558,9 +586,8 @@ func TestClaimNextMarksTicketInProgress(t *testing.T) {
 		t.Fatalf("ClaimNext(acme) = %#v, want ticket 2 in_progress", ticket)
 	}
 
-	_, _, _, _, err = Next("acme")
-	if err != nil {
-		t.Fatalf("Next(acme) after claim should find remaining open ticket: %v", err)
+	if _, err := NextTicket("acme"); err != nil {
+		t.Fatalf("NextTicket(acme) after claim should find remaining open ticket: %v", err)
 	}
 
 	claimed, err := Show(2)
@@ -592,10 +619,10 @@ func TestBumpChangesPriorityAndOrdering(t *testing.T) {
 		t.Fatalf("Bump returned (%d, %d), want (%d, 0)", id, priority, firstID)
 	}
 
-	got := List("acme", false)
+	got := listLines(t, "acme", false)
 	want := []string{"ac-1 [P0] first", "ac-2 [P1] second"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("List(acme, false) after Bump = %#v, want %#v", got, want)
+		t.Fatalf("listLines(acme, false) after Bump = %#v, want %#v", got, want)
 	}
 }
 
@@ -664,14 +691,14 @@ func TestRemoveDeletesOnlyWithinProject(t *testing.T) {
 		t.Fatalf("Remove(%d, acme): %v", acmeID, err)
 	}
 
-	if got := List("acme", true); len(got) != 0 {
-		t.Fatalf("List(acme, true) after Remove = %#v, want empty", got)
+	if got := listLines(t, "acme", true); len(got) != 0 {
+		t.Fatalf("listLines(acme, true) after Remove = %#v, want empty", got)
 	}
 
-	got := List("zen", true)
+	got := listLines(t, "zen", true)
 	want := []string{"ze-2 [P2] shared"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("List(zen, true) after Remove = %#v, want %#v", got, want)
+		t.Fatalf("listLines(zen, true) after Remove = %#v, want %#v", got, want)
 	}
 }
 

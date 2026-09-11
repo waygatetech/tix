@@ -35,8 +35,8 @@ func TestVariantSpellingsResolveToOneProject(t *testing.T) {
 	}
 
 	// Reads fold the same way, so a variant never shows a partial backlog.
-	if got := List("Front-End", false); len(got) != 5 {
-		t.Errorf("List(Front-End) returned %d tickets, want 5: %v", len(got), got)
+	if got := listLines(t, "Front-End", false); len(got) != 5 {
+		t.Errorf("listLines(Front-End) returned %d tickets, want 5: %v", len(got), got)
 	}
 }
 
@@ -428,7 +428,7 @@ func TestMigrationBackfillsProjectsAndPinnedPrefixes(t *testing.T) {
 	if !reflect.DeepEqual(projects, want) {
 		t.Fatalf("ListProjects() = %#v, want %#v", projects, want)
 	}
-	if got := List("acme", false); len(got) != 1 || !strings.HasPrefix(got[0], "acm-") {
-		t.Errorf("List(acme) = %v, want one ticket prefixed acm-", got)
+	if got := listLines(t, "acme", false); len(got) != 1 || !strings.HasPrefix(got[0], "acm-") {
+		t.Errorf("listLines(acme) = %v, want one ticket prefixed acm-", got)
 	}
 }

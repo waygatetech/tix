@@ -133,7 +133,7 @@ func TestMigrateUpgradesPreMigrationDatabase(t *testing.T) {
 	if version != len(migrations) {
 		t.Errorf("user_version = %d, want %d", version, len(migrations))
 	}
-	if lines := List("acme", false); len(lines) != 1 {
+	if lines := listLines(t, "acme", false); len(lines) != 1 {
 		t.Errorf("got %d tickets after migrating, want 1: %v", len(lines), lines)
 	}
 
@@ -227,7 +227,7 @@ func TestInitDBReadsWhileAnotherConnectionWrites(t *testing.T) {
 		t.Fatalf("InitDB: %v", err)
 	}
 
-	lines := List("acme", false)
+	lines := listLines(t, "acme", false)
 	if len(lines) != 1 {
 		t.Fatalf("got %d tickets while a writer held the lock, want 1: %v", len(lines), lines)
 	}

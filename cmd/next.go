@@ -16,25 +16,21 @@ var nextCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if jsonOutput {
-			ticket, err := tix.NextTicket(project)
-			if err != nil {
-				return err
-			}
-			return printJSON(ticket, compactOutput, fieldsOutput)
-		}
-
-		id, title, body, priority, err := tix.Next(project)
+		ticket, err := tix.NextTicket(project)
 		if err != nil {
 			return err
 		}
+		if jsonOutput {
+			return printJSON(ticket, compactOutput, fieldsOutput)
+		}
+
 		prefix, err := tix.PrefixFor(project)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s [P%d] %s\n", tix.FormatID(prefix, id), priority, title)
-		if body != "" {
-			fmt.Println(body)
+		fmt.Printf("%s [P%d] %s\n", tix.FormatID(prefix, ticket.ID), ticket.Priority, ticket.Title)
+		if ticket.Body != "" {
+			fmt.Println(ticket.Body)
 		}
 		return nil
 	},

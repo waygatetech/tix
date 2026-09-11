@@ -71,7 +71,6 @@ func Add(title, body string, priority int, project string) (int64, error) {
 		title, body, priority, maxRank+1, project,
 	)
 	if err != nil {
-		fmt.Println("insert failed:", err)
 		return 0, err
 	}
 	id, _ := res.LastInsertId()
@@ -85,7 +84,6 @@ func Bump(id, priority int) (int, int, error) {
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		fmt.Println("no such ticket:", id)
 		return 0, 0, fmt.Errorf("no such ticket: %d", id)
 	}
 	return id, priority, nil
@@ -101,31 +99,6 @@ func Done(id int) error {
 		return fmt.Errorf("no such ticket: %d", id)
 	}
 	return nil
-}
-
-func List(project string, showAll bool) []string {
-	tickets, err := ListTickets(ListOptions{Project: project, ShowAll: showAll})
-	if err != nil {
-		fmt.Println("query failed:", err)
-		return []string{}
-	}
-
-	prefixes, err := Prefixes()
-	if err != nil {
-		fmt.Println("prefix lookup failed:", err)
-		prefixes = map[string]string{}
-	}
-
-	var lines []string
-	for _, ticket := range tickets {
-		marker := ""
-		if ticket.Status == "done" {
-			marker = "x "
-		}
-		lines = append(lines, fmt.Sprintf("%s%s [P%d] %s",
-			marker, FormatID(prefixes[ticket.Project], ticket.ID), ticket.Priority, ticket.Title))
-	}
-	return lines
 }
 
 func ListTickets(options ListOptions) ([]Ticket, error) {
@@ -272,14 +245,6 @@ func FormatAge(d time.Duration) string {
 	}
 	days := int(d.Hours()) / 24
 	return fmt.Sprintf("%dd%dh", days, int(d.Hours())%24)
-}
-
-func Next(project string) (int, string, string, int, error) {
-	ticket, err := NextTicket(project)
-	if err != nil {
-		return 0, "", "", 0, err
-	}
-	return ticket.ID, ticket.Title, ticket.Body, ticket.Priority, nil
 }
 
 func NextTicket(project string) (Ticket, error) {
