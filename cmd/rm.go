@@ -22,6 +22,10 @@ var rmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		project, err := projectScope()
+		if err != nil {
+			return err
+		}
 		if err := tix.Remove(id, project); err != nil {
 			return fmt.Errorf("error removing ticket: %w", err)
 		}
@@ -35,8 +39,7 @@ var rmCmd = &cobra.Command{
 }
 
 func init() {
-	rmCmd.Flags().StringVarP(&project, "project", "p", "", "project name")
-	_ = rmCmd.MarkFlagRequired("project")
+	rmCmd.Flags().StringVarP(&project, "project", "p", "", "project name (default: the project registered for this directory)")
 	rootCmd.AddCommand(rmCmd)
 
 	// Here you will define your flags and configuration settings.

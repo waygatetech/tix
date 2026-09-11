@@ -80,6 +80,7 @@ tix done 1
 - `tix show [id] [--json] [--compact] [--fields FIELDS]` — show full details for one ticket.
 - `tix projects [--json] [--compact] [--fields FIELDS]` — list all projects with ticket counts grouped by status.
 - `tix projects add NAME [--key PREFIX] [--repo-path PATH]` — create a project. `--key` pins its ticket ID prefix; `--repo-path` records where its code lives.
+- `tix projects set-repo-path NAME [PATH]` — record where an existing project's code lives, so commands run there can skip `--project`. `PATH` defaults to the current directory.
 - `tix bump [id] [priority]` — change a ticket's priority.
 - `tix done [id]` — mark a ticket done.
 - `tix rm [id] --project NAME` — remove a ticket from a project.
@@ -102,6 +103,20 @@ unknown project "frontned": known projects are acme, frontend, zen; pass --creat
 Matching ignores case and punctuation, so `frontend`, `Frontend`, `front-end` and `FRONT END` all reach the one project named `frontend` rather than starting three more. Creating a project whose name only varies that way is refused for the same reason.
 
 This matters most for tools with no shell history to autocomplete from: an agent inventing a spelling gets an error naming the real projects instead of a private backlog nobody else can see.
+
+### Inferring the project from the working directory
+
+Tell a project where its code lives, and commands run inside that checkout stop needing `--project` at all:
+
+```sh
+tix projects set-repo-path acme ~/src/acme
+
+cd ~/src/acme/internal/search
+tix next          # the acme backlog
+tix add "fix search" --body "timeouts over 30s"
+```
+
+Any directory inside the repository counts, and the deepest registered repo wins, so a project checked out inside another one answers for its own tree. `--project` still works everywhere and always wins, which keeps filing into another repo's backlog something you say out loud. Outside every registered repo the flag is required, and the error says which directory found no match.
 
 ### Ticket IDs
 

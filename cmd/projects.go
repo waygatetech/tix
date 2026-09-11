@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -45,10 +46,14 @@ var projectsAddCmd = &cobra.Command{
 	Short: "Create a project",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		repoPath, err := absRepoPath(projectRepoPath)
+		if err != nil {
+			return err
+		}
 		project, err := tix.CreateProject(tix.Project{
 			Name:     args[0],
 			Key:      projectKey,
-			RepoPath: projectRepoPath,
+			RepoPath: repoPath,
 		})
 		if err != nil {
 			return err
@@ -62,6 +67,49 @@ var projectsAddCmd = &cobra.Command{
 	},
 }
 
+// projectsSetRepoPathCmd points an existing project at its checkout, which is
+// what lets commands run there without naming it. Projects created before the
+// repo path existed need this; new ones can pass --repo-path instead.
+var projectsSetRepoPathCmd = &cobra.Command{
+	Use:   "set-repo-path NAME [PATH]",
+	Short: "Record where a project's code lives",
+	Long: `Commands that take --project infer the project from the working
+directory when it sits inside a registered repository.
+
+PATH defaults to the current directory.`,
+	Args: cobra.RangeArgs(1, 2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path := "."
+		if len(args) == 2 {
+			path = args[1]
+		}
+		repoPath, err := absRepoPath(path)
+		if err != nil {
+			return err
+		}
+		resolved, err := tix.SetRepoPath(args[0], repoPath)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s %s\n", resolved, repoPath)
+		return nil
+	},
+}
+
+// absRepoPath stores repo paths absolute: a relative one means whatever
+// directory it was typed in, which is exactly the thing the stored path is
+// supposed to answer.
+func absRepoPath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve repo path failed: %w", err)
+	}
+	return abs, nil
+}
+
 func init() {
 	projectsCmd.Flags().BoolVar(&projectsJSONOutput, "json", false, "output projects as JSON")
 	projectsCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
@@ -69,6 +117,7 @@ func init() {
 	projectsAddCmd.Flags().StringVar(&projectKey, "key", "", "pin the ticket ID prefix instead of deriving it")
 	projectsAddCmd.Flags().StringVar(&projectRepoPath, "repo-path", "", "path to the project's repository")
 	projectsCmd.AddCommand(projectsAddCmd)
+	projectsCmd.AddCommand(projectsSetRepoPathCmd)
 	rootCmd.AddCommand(projectsCmd)
 }
 

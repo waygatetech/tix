@@ -1,6 +1,9 @@
 package tix
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -269,6 +272,103 @@ func TestSetRepoPathRecordsWhereCodeLives(t *testing.T) {
 
 	if _, err := SetRepoPath("nope", "/src/nope"); err == nil {
 		t.Error("SetRepoPath on an unknown project succeeded, want an error")
+	}
+}
+
+// The point of the repo path: inside a registered checkout, the project no
+// longer has to be typed.
+func TestProjectForDirMatchesRegisteredRepo(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "frontend", "backend")
+
+	repo := t.TempDir()
+	if _, err := SetRepoPath("frontend", repo); err != nil {
+		t.Fatalf("SetRepoPath: %v", err)
+	}
+
+	for _, dir := range []string{repo, filepath.Join(repo, "cmd", "web")} {
+		got, err := ProjectForDir(dir)
+		if err != nil || got != "frontend" {
+			t.Errorf("ProjectForDir(%q) = (%q, %v), want (frontend, nil)", dir, got, err)
+		}
+	}
+
+	// A sibling directory is not inside the repo, even though its path shares a
+	// prefix with it.
+	if _, err := ProjectForDir(repo + "-other"); !errors.Is(err, ErrNoProjectForDir) {
+		t.Errorf("ProjectForDir(sibling) error = %v, want ErrNoProjectForDir", err)
+	}
+	// A project with no repo path recorded never matches anything.
+	if _, err := ProjectForDir(t.TempDir()); !errors.Is(err, ErrNoProjectForDir) {
+		t.Errorf("ProjectForDir(unregistered) error = %v, want ErrNoProjectForDir", err)
+	}
+}
+
+// A checkout inside another project's tree belongs to itself, so the deepest
+// registered repo wins rather than the first one that happens to contain it.
+func TestProjectForDirPrefersTheDeepestRepo(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "monorepo", "widget")
+
+	outer := t.TempDir()
+	inner := filepath.Join(outer, "packages", "widget")
+	if err := os.MkdirAll(inner, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := SetRepoPath("monorepo", outer); err != nil {
+		t.Fatalf("SetRepoPath(monorepo): %v", err)
+	}
+	if _, err := SetRepoPath("widget", inner); err != nil {
+		t.Fatalf("SetRepoPath(widget): %v", err)
+	}
+
+	if got, err := ProjectForDir(inner); err != nil || got != "widget" {
+		t.Errorf("ProjectForDir(inner) = (%q, %v), want (widget, nil)", got, err)
+	}
+	if got, err := ProjectForDir(outer); err != nil || got != "monorepo" {
+		t.Errorf("ProjectForDir(outer) = (%q, %v), want (monorepo, nil)", got, err)
+	}
+}
+
+// Two projects pointed at one checkout cannot be told apart, and picking either
+// one files the ticket in the wrong backlog.
+func TestProjectForDirRefusesAmbiguousRepo(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "alpha", "beta")
+
+	repo := t.TempDir()
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := SetRepoPath(name, repo); err != nil {
+			t.Fatalf("SetRepoPath(%q): %v", name, err)
+		}
+	}
+
+	_, err := ProjectForDir(repo)
+	if err == nil {
+		t.Fatal("ProjectForDir on a shared repo path succeeded, want an error")
+	}
+	if !strings.Contains(err.Error(), "alpha") || !strings.Contains(err.Error(), "beta") {
+		t.Errorf("error %q does not name both projects", err)
+	}
+}
+
+// A relative repo path, or one reached through a symlink, still has to match the
+// directory a command actually runs in.
+func TestProjectForDirNormalizesPaths(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "frontend")
+
+	repo := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if _, err := SetRepoPath("frontend", link); err != nil {
+		t.Fatalf("SetRepoPath: %v", err)
+	}
+
+	if got, err := ProjectForDir(repo); err != nil || got != "frontend" {
+		t.Errorf("ProjectForDir(%q) = (%q, %v), want (frontend, nil)", repo, got, err)
 	}
 }
 

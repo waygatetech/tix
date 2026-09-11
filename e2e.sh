@@ -283,11 +283,24 @@ wait
 check "mcp answers initialize over stdio" '"serverInfo":{"name":"tix"' cat "$mcp_out"
 check "mcp advertises ticket tools" '"name":"tix_claim_next"' cat "$mcp_out"
 
+# a recorded repo path makes --project unnecessary inside that checkout, which
+# is the common case now that one database holds every repo's backlog
+repo="$tmp/repo"
+mkdir -p "$repo/internal/deep"
+check "projects add records a repo path" "created project inferred (inf)" "$tmp/tix" projects add inferred --key inf --repo-path "$repo"
+check "add infers the project from the working directory" "[P2] inferred ticket" bash -c "cd '$repo/internal/deep' && '$tmp/tix' add 'inferred ticket' -b body"
+check "the inferred ticket landed in the registered project" "inf-" bash -c "cd '$repo' && '$tmp/tix' list"
+check "next infers the project too" "inferred ticket" bash -c "cd '$repo/internal/deep' && '$tmp/tix' next"
+check "claim-next infers the project too" '"project":"inferred"' bash -c "cd '$repo' && '$tmp/tix' claim-next --json --compact"
+check "an explicit --project overrides the directory" "sandbox ticket" bash -c "cd '$repo' && '$tmp/tix' list --project sandbox"
+check "set-repo-path registers a project created earlier" "zen $tmp/zen-repo" bash -c "mkdir -p '$tmp/zen-repo' && '$tmp/tix' projects set-repo-path zen '$tmp/zen-repo'"
+check "a project registered later infers too" "refactor parser" bash -c "cd '$tmp/zen-repo' && '$tmp/tix' list --all"
+
 # graceful failures
 check_status "init-agent without project exits non-zero" 1 "$tmp/tix" init-agent
-check "list requires --project" 'required flag(s) "project" not set' "$tmp/tix" list
+check "list outside a registered repo still needs --project" "no project's repo path contains" "$tmp/tix" list
 check_status "list without --project exits non-zero" 1 "$tmp/tix" list
-check "rm requires --project" 'required flag(s) "project" not set' "$tmp/tix" rm 3
+check "rm outside a registered repo still needs --project" "no project's repo path contains" "$tmp/tix" rm 3
 check_status "rm without --project exits non-zero" 1 "$tmp/tix" rm 3
 check "rm requires an id" "ticket id is required" "$tmp/tix" rm --project zen
 check_status "rm without id exits non-zero" 1 "$tmp/tix" rm --project zen

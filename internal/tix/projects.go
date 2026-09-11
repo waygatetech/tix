@@ -3,6 +3,7 @@ package tix
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -10,6 +11,10 @@ import (
 // ErrUnknownProject reports a project name that is not in the table. It is the
 // one error EnsureProject is allowed to answer by creating the project.
 var ErrUnknownProject = errors.New("unknown project")
+
+// ErrNoProjectForDir reports a directory that sits inside no registered repo,
+// which is the case where a caller still has to name the project itself.
+var ErrNoProjectForDir = errors.New("no project registered for")
 
 // Projects are rows, not whatever string a caller happened to type. An agent
 // with no shell history and no autocomplete will write "frontend", "front-end",
@@ -173,6 +178,88 @@ func CreateProject(project Project) (Project, error) {
 		return Project{}, fmt.Errorf("create project failed: %w", err)
 	}
 	return project, nil
+}
+
+// ProjectForDir returns the project whose repo_path contains dir. One database
+// holds every repo's backlog, so the directory a command runs in is usually
+// enough to say which project it meant; naming the project stays the way to
+// reach another repo's tickets from here.
+//
+// The deepest matching repo_path wins, so a project checked out inside another
+// project's tree answers for its own directory.
+func ProjectForDir(dir string) (string, error) {
+	projects, err := ListProjects()
+	if err != nil {
+		return "", err
+	}
+
+	dir = normalizeRepoPath(dir)
+	var matches []string
+	deepest := -1
+	for _, project := range projects {
+		repo := normalizeRepoPath(project.RepoPath)
+		if repo == "" || !dirWithin(dir, repo) {
+			continue
+		}
+		switch {
+		case len(repo) > deepest:
+			matches, deepest = []string{project.Name}, len(repo)
+		case len(repo) == deepest:
+			matches = append(matches, project.Name)
+		}
+	}
+
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", fmt.Errorf("%w %s", ErrNoProjectForDir, dir)
+	default:
+		// Two projects pointed at one checkout: guessing between them files the
+		// ticket in the wrong backlog, which is worse than asking.
+		sort.Strings(matches)
+		return "", fmt.Errorf(
+			"%s is registered to more than one project: %s — name the project explicitly",
+			dir, strings.Join(matches, ", "),
+		)
+	}
+}
+
+// normalizeRepoPath puts a path in the one form comparisons can use: absolute,
+// with symlinks resolved. A repo reached through a symlink (every path under
+// /tmp on macOS is one) otherwise compares unequal to the same repo stored
+// under its real name.
+//
+// Only the longest existing prefix can be resolved, and the rest is put back as
+// typed: a directory that does not exist still has to compare equal to the repo
+// it would live in.
+func normalizeRepoPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+
+	dir, rest := abs, ""
+	for {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return abs
+		}
+		dir, rest = parent, filepath.Join(filepath.Base(dir), rest)
+	}
+}
+
+// dirWithin reports whether dir is repo or sits under it. The separator keeps
+// /src/api from matching a project registered at /src/app.
+func dirWithin(dir, repo string) bool {
+	return dir == repo || strings.HasPrefix(dir, repo+string(filepath.Separator))
 }
 
 // SetRepoPath records where a project's code lives.

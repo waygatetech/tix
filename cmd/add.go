@@ -51,6 +51,11 @@ var addCmd = &cobra.Command{
 			title += " " + a
 		}
 
+		project, err := projectScope()
+		if err != nil {
+			return err
+		}
+
 		if createProject {
 			resolved, created, err := tix.EnsureProject(project)
 			if err != nil {
@@ -76,8 +81,7 @@ var addCmd = &cobra.Command{
 }
 
 func init() {
-	addCmd.Flags().StringVar(&project, "project", "", "project name")
-	_ = addCmd.MarkFlagRequired("project")
+	addCmd.Flags().StringVar(&project, "project", "", "project name (default: the project registered for this directory)")
 	addCmd.Flags().BoolVar(&createProject, "create", false, "create the project if it does not exist yet")
 	addCmd.Flags().StringVarP(&body, "body", "b", "", "ticket body")
 	addCmd.Flags().StringVar(&bodyFile, "body-file", "", "read ticket body from file")

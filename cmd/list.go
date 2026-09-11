@@ -56,8 +56,7 @@ var listCmd = &cobra.Command{
 }
 
 func init() {
-	listCmd.Flags().StringVarP(&project, "project", "p", "", "project name")
-	_ = listCmd.MarkFlagRequired("project")
+	listCmd.Flags().StringVarP(&project, "project", "p", "", "project name (default: the project registered for this directory)")
 	listCmd.Flags().BoolVarP(&showAll, "all", "a", false, "include tickets in all statuses")
 	listCmd.Flags().StringVar(&statusFilter, "status", "", "filter by status")
 	listCmd.Flags().StringVar(&priorityFilter, "priority", "", "filter by priority")
@@ -79,8 +78,12 @@ func init() {
 }
 
 func listOptions() (tix.ListOptions, error) {
+	scope, err := projectScope()
+	if err != nil {
+		return tix.ListOptions{}, err
+	}
 	options := tix.ListOptions{
-		Project: project,
+		Project: scope,
 		ShowAll: showAll,
 		Status:  statusFilter,
 		Limit:   limitFilter,

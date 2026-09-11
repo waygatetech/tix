@@ -15,6 +15,10 @@ var claimNextCmd = &cobra.Command{
 	Use:   "claim-next",
 	Short: "Claim the next open ticket",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		project, err := projectScope()
+		if err != nil {
+			return err
+		}
 		ticket, err := tix.ClaimNext(project)
 		if err != nil {
 			return err
@@ -36,8 +40,7 @@ var claimNextCmd = &cobra.Command{
 }
 
 func init() {
-	claimNextCmd.Flags().StringVarP(&project, "project", "p", "", "project name")
-	_ = claimNextCmd.MarkFlagRequired("project")
+	claimNextCmd.Flags().StringVarP(&project, "project", "p", "", "project name (default: the project registered for this directory)")
 	claimNextCmd.Flags().BoolVar(&jsonOutput, "json", false, "output ticket as JSON")
 	claimNextCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
 	claimNextCmd.Flags().StringVar(&fieldsOutput, "fields", "", "comma-separated JSON fields to include")
