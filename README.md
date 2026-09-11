@@ -76,11 +76,31 @@ tix done 1
 - `tix bump [id] [priority]` — change a ticket's priority.
 - `tix done [id]` — mark a ticket done.
 - `tix rm [id] --project NAME` — remove a ticket from a project.
+- `tix prefix [project] [prefix]` — show ticket ID prefixes, or pin one for a project.
 - `tix best-practices [--json] [--compact] [--fields FIELDS]` — print terse workflow guidance, handy for scripting or onboarding an AI agent.
 - `tix mcp` — run an MCP server on stdio exposing the ticket operations as tools, for MCP clients like Claude Desktop. See [mcp/README.md](mcp/README.md).
 - `tix init-agent PROJECT [--db PATH]` — append idempotent `tix` workflow guidance to `AGENTS.md` and `CLAUDE.md` at the current Git repository root (or the current directory), so coding agents know how to use `tix` in this repo.
 
 Priorities sort ascending, so `P0` appears before `P2`. Tickets with the same priority keep insertion order.
+
+### Ticket IDs
+
+One database holds every project, so ticket IDs are unique across all of them. Output displays them with a short project prefix, which tells you which repo a ticket belongs to without a lookup:
+
+```
+fe-47 [P2] fix login redirect
+```
+
+Any command taking an ID accepts either form — `tix done 47` and `tix done fe-47` both work, so IDs already in shell history and scripts stay valid. The difference is that the prefixed form is checked: if ticket 47 is not a `fe` ticket, the command fails instead of acting on the wrong project's ticket.
+
+The ID is an integer everywhere it is consumed by a program. `--json` output and the MCP tools emit `"id": 47`, never the prefixed string, so the prefix is purely a display and input convenience.
+
+Prefixes are derived from project names automatically — the shortest unique lowercase prefix of the name. Adding a project whose name collides can shift another project's derived prefix, so pin one when you want it fixed:
+
+```sh
+tix prefix              # list every project's prefix
+tix prefix frontend fe  # pin it
+```
 
 ### JSON output
 

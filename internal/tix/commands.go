@@ -78,13 +78,20 @@ func List(project string, showAll bool) []string {
 		return []string{}
 	}
 
+	prefixes, err := Prefixes()
+	if err != nil {
+		fmt.Println("prefix lookup failed:", err)
+		prefixes = map[string]string{}
+	}
+
 	var lines []string
 	for _, ticket := range tickets {
 		marker := ""
 		if ticket.Status == "done" {
 			marker = "x "
 		}
-		lines = append(lines, fmt.Sprintf("%s#%d [P%d] %s", marker, ticket.ID, ticket.Priority, ticket.Title))
+		lines = append(lines, fmt.Sprintf("%s%s [P%d] %s",
+			marker, FormatID(prefixes[ticket.Project], ticket.ID), ticket.Priority, ticket.Title))
 	}
 	return lines
 }

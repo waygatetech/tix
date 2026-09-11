@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/spf13/cobra"
 	"github.com/waygatetech/tix/internal/tix"
@@ -19,15 +18,18 @@ var rmCmd = &cobra.Command{
 		if len(args) == 0 {
 			return fmt.Errorf("ticket id is required")
 		}
-		id, err := strconv.Atoi(args[0])
+		id, err := tix.ResolveRef(args[0])
 		if err != nil {
-			return fmt.Errorf("invalid ticket id: %s", args[0])
+			return err
 		}
-		err = tix.Remove(id, project)
-		if err != nil {
+		if err := tix.Remove(id, project); err != nil {
 			return fmt.Errorf("error removing ticket: %w", err)
 		}
-		fmt.Printf("#%d removed\n", id)
+		prefix, err := tix.PrefixFor(project)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s removed\n", tix.FormatID(prefix, id))
 		return nil
 	},
 }

@@ -58,6 +58,13 @@ var migrations = []string{
 		project TEXT NOT NULL DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);`,
+	// Prefixes are derived from project names, so this table holds only the
+	// manual overrides. An empty table means every project still gets a
+	// prefix, which is why no backfill is needed here.
+	`CREATE TABLE IF NOT EXISTS project_prefixes (
+		project TEXT PRIMARY KEY,
+		prefix TEXT NOT NULL UNIQUE
+	);`,
 }
 
 // migrate applies every migration the database has not seen yet. The version

@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/spf13/cobra"
 	"github.com/waygatetech/tix/internal/tix"
@@ -17,9 +16,9 @@ var showCmd = &cobra.Command{
 	Short: "Show a ticket",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		id, err := strconv.Atoi(args[0])
+		id, err := tix.ResolveRef(args[0])
 		if err != nil {
-			return fmt.Errorf("invalid id: %s", args[0])
+			return err
 		}
 
 		ticket, err := tix.Show(id)
@@ -30,7 +29,12 @@ var showCmd = &cobra.Command{
 			return printJSON(ticket, compactOutput, fieldsOutput)
 		}
 
-		fmt.Printf("#%d [P%d] %s (%s, %s)\n", ticket.ID, ticket.Priority, ticket.Title, ticket.Status, ticket.Project)
+		prefix, err := tix.PrefixFor(ticket.Project)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s [P%d] %s (%s, %s)\n",
+			tix.FormatID(prefix, ticket.ID), ticket.Priority, ticket.Title, ticket.Status, ticket.Project)
 		if ticket.Body != "" {
 			fmt.Println(ticket.Body)
 		}

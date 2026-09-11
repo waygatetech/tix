@@ -54,7 +54,11 @@ var addCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("add failed: %w", err)
 		}
-		fmt.Printf("#%d [P%d] %s\n", id, priority, title)
+		prefix, err := tix.PrefixFor(project)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s [P%d] %s\n", tix.FormatID(prefix, int(id)), priority, title)
 		return nil
 	},
 }

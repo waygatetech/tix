@@ -23,7 +23,11 @@ var claimNextCmd = &cobra.Command{
 			return printJSON(ticket, compactOutput, fieldsOutput)
 		}
 
-		fmt.Printf("#%d [P%d] %s\n", ticket.ID, ticket.Priority, ticket.Title)
+		prefix, err := tix.PrefixFor(ticket.Project)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s [P%d] %s\n", tix.FormatID(prefix, ticket.ID), ticket.Priority, ticket.Title)
 		if ticket.Body != "" {
 			fmt.Println(ticket.Body)
 		}

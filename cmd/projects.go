@@ -26,8 +26,14 @@ var projectsCmd = &cobra.Command{
 		if projectsJSONOutput {
 			return printJSON(projects, compactOutput, fieldsOutput)
 		}
+		prefixes, err := tix.Prefixes()
+		if err != nil {
+			return err
+		}
 		for _, project := range projects {
-			fmt.Printf("%s %s total=%d\n", project.Project, statusCounts(project.StatusCounts), project.Total)
+			fmt.Printf("%s (%s) %s total=%d\n",
+				project.Project, prefixes[project.Project],
+				statusCounts(project.StatusCounts), project.Total)
 		}
 		return nil
 	},

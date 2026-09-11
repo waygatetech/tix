@@ -27,7 +27,11 @@ var nextCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("#%d [P%d] %s\n", id, priority, title)
+		prefix, err := tix.PrefixFor(project)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s [P%d] %s\n", tix.FormatID(prefix, id), priority, title)
 		if body != "" {
 			fmt.Println(body)
 		}

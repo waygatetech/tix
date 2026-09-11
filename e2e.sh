@@ -65,11 +65,11 @@ check_status() {
 }
 
 # projects are ad-hoc: no create command, the --project string scopes everything
-check "add ticket (defines project acme)" "#1 [P2] fix login bug" "$tmp/tix" add --project acme "fix login bug" -b "users can't log in"
-check "add high-priority ticket" "#2 [P0] write docs" "$tmp/tix" add --project acme "write docs" -b "README" -p 0
-check "add ticket in a second project" "#3 [P2] refactor parser" "$tmp/tix" add --project zen "refactor parser" -b "split tokens"
+check "add ticket (defines project acme)" "ac-1 [P2] fix login bug" "$tmp/tix" add --project acme "fix login bug" -b "users can't log in"
+check "add high-priority ticket" "ac-2 [P0] write docs" "$tmp/tix" add --project acme "write docs" -b "README" -p 0
+check "add ticket in a second project" "ze-3 [P2] refactor parser" "$tmp/tix" add --project zen "refactor parser" -b "split tokens"
 printf "generated body from a file" >"$tmp/body.txt"
-check "add reads body from file" "#4 [P1] file-backed ticket" "$tmp/tix" add --project files "file-backed ticket" --body-file "$tmp/body.txt" -p 1
+check "add reads body from file" "fi-4 [P1] file-backed ticket" "$tmp/tix" add --project files "file-backed ticket" --body-file "$tmp/body.txt" -p 1
 
 check "list shows all acme tickets" "write docs" "$tmp/tix" list --project acme
 check "list acme also shows #1" "fix login bug" "$tmp/tix" list --project acme
@@ -80,9 +80,9 @@ check "list filters by status" '"status":"open"' "$tmp/tix" list --project acme 
 check "list filters by priority" '"priority":0' "$tmp/tix" list --project acme --priority 0 --json --compact
 check "list limits results" '[{"id":2,' "$tmp/tix" list --project acme --limit 1 --json --compact
 check "list supports JSON field selection" '[{"id":2,"title":"write docs"}' "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,title
-check "projects lists acme counts" "acme open=2 total=2" "$tmp/tix" projects
-check "projects lists files counts" "files open=1 total=1" "$tmp/tix" projects
-check "projects lists zen counts" "zen open=1 total=1" "$tmp/tix" projects
+check "projects lists acme counts" "acme (ac) open=2 total=2" "$tmp/tix" projects
+check "projects lists files counts" "files (fi) open=1 total=1" "$tmp/tix" projects
+check "projects lists zen counts" "zen (ze) open=1 total=1" "$tmp/tix" projects
 check "projects supports JSON output" '"status_counts": {' "$tmp/tix" projects --json
 check "projects supports compact JSON output" '[{"project":"acme",' "$tmp/tix" projects --json --compact
 check "projects supports JSON field selection" '[{"project":"acme","total":2}' "$tmp/tix" projects --json --compact --fields project,total
@@ -139,14 +139,24 @@ check "show supports compact JSON output" '{"id":2,' "$tmp/tix" show 2 --json --
 check "show supports JSON field selection" '{"id":2,"status":"open"}' "$tmp/tix" show 2 --json --compact --fields id,status
 check "claim-next marks ticket in progress" '"status":"in_progress"' "$tmp/tix" claim-next --project zen --json --compact
 check "claim-next removes claimed ticket from next" "no open tickets" "$tmp/tix" next --project zen
-check "bump #1 to priority 0" "#1 -> P0" "$tmp/tix" bump 1 0
+check "bump #1 to priority 0" "ac-1 -> P0" "$tmp/tix" bump 1 0
 check "next now returns bumped ticket" "fix login bug" "$tmp/tix" next --project acme
 
-check "rm removes a ticket" "#2 removed" "$tmp/tix" rm 2 --project acme
-check "done marks a ticket" "#1 done" "$tmp/tix" done 1
-check_absent "list excludes done ticket" "#1" "$tmp/tix" list --project acme
-check "list --all shows done ticket" "x #1" "$tmp/tix" list --project acme -a
-check "projects counts done tickets" "acme done=1 total=1" "$tmp/tix" projects
+# prefixed ids: the bare integer stays valid so existing shell history and
+# scripts keep working, while the prefixed form additionally checks the project
+check "show accepts a prefixed id" "ac-1 [P0] fix login bug" "$tmp/tix" show ac-1
+check "show accepts a bare id" "ac-1 [P0] fix login bug" "$tmp/tix" show 1
+check "show keeps integer ids in JSON" '{"id":1,' "$tmp/tix" show ac-1 --json --compact
+check "prefixed id from the wrong project is rejected" 'belongs to project "acme"' "$tmp/tix" show ze-1
+check_status "wrong-project id exits non-zero" 1 "$tmp/tix" show ze-1
+check "prefix lists derived prefixes" "acme ac" "$tmp/tix" prefix
+check "prefix reports one project" "zen ze" "$tmp/tix" prefix zen
+
+check "rm removes a ticket" "ac-2 removed" "$tmp/tix" rm 2 --project acme
+check "done marks a ticket" "ac-1 done" "$tmp/tix" done 1
+check_absent "list excludes done ticket" "ac-1" "$tmp/tix" list --project acme
+check "list --all shows done ticket" "x ac-1" "$tmp/tix" list --project acme -a
+check "projects counts done tickets" "acme (ac) done=1 total=1" "$tmp/tix" projects
 check "next has no open tickets left" "no open tickets" "$tmp/tix" next --project acme
 
 check "claimed ticket appears with all tickets" "refactor parser" "$tmp/tix" list --project zen --all
@@ -183,7 +193,7 @@ done
 wait
 
 added=$(cat "$tmp"/add.*.out)
-added_ok=$(grep -c '^#[0-9]* ' <<<"$added" || true)
+added_ok=$(grep -c '^pa-[0-9]* ' <<<"$added" || true)
 if [[ "$added_ok" -eq "$parallel" ]]; then
   echo "ok: $parallel parallel adds all succeeded"
   pass=$((pass + 1))

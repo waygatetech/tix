@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/spf13/cobra"
 	"github.com/waygatetech/tix/internal/tix"
@@ -20,16 +19,23 @@ var doneCmd = &cobra.Command{
 			return fmt.Errorf("usage: tix done [id]")
 		}
 
-		id, err := strconv.Atoi(args[0])
+		id, err := tix.ResolveRef(args[0])
 		if err != nil {
-			return fmt.Errorf("invalid id: %s", args[0])
+			return err
 		}
 
-		err = tix.Done(id)
+		ticket, err := tix.Show(id)
 		if err != nil {
+			return err
+		}
+		if err := tix.Done(id); err != nil {
 			return fmt.Errorf("done failed: %w", err)
 		}
-		fmt.Printf("#%d done\n", id)
+		prefix, err := tix.PrefixFor(ticket.Project)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s done\n", tix.FormatID(prefix, id))
 		return nil
 	},
 }

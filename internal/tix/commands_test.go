@@ -56,8 +56,8 @@ func TestAddListNextAndProjectIsolation(t *testing.T) {
 
 	got := List("acme", false)
 	want := []string{
-		"#2 [P0] write docs",
-		"#1 [P2] fix login bug",
+		"ac-2 [P0] write docs",
+		"ac-1 [P2] fix login bug",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("List(acme, false) = %#v, want %#v", got, want)
@@ -72,7 +72,7 @@ func TestAddListNextAndProjectIsolation(t *testing.T) {
 	}
 
 	got = List("zen", false)
-	want = []string{"#3 [P2] refactor parser"}
+	want = []string{"ze-3 [P2] refactor parser"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("List(zen, false) = %#v, want %#v", got, want)
 	}
@@ -95,13 +95,13 @@ func TestDoneFiltersOpenListAndNext(t *testing.T) {
 	}
 
 	got := List("acme", false)
-	want := []string{"#2 [P2] second"}
+	want := []string{"ac-2 [P2] second"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("List(acme, false) after Done = %#v, want %#v", got, want)
 	}
 
 	got = List("acme", true)
-	want = []string{"x #1 [P1] first", "#2 [P2] second"}
+	want = []string{"x ac-1 [P1] first", "ac-2 [P2] second"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("List(acme, true) after Done = %#v, want %#v", got, want)
 	}
@@ -249,7 +249,7 @@ func TestBumpChangesPriorityAndOrdering(t *testing.T) {
 	}
 
 	got := List("acme", false)
-	want := []string{"#1 [P0] first", "#2 [P1] second"}
+	want := []string{"ac-1 [P0] first", "ac-2 [P1] second"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("List(acme, false) after Bump = %#v, want %#v", got, want)
 	}
@@ -321,7 +321,7 @@ func TestRemoveDeletesOnlyWithinProject(t *testing.T) {
 	}
 
 	got := List("zen", true)
-	want := []string{"#2 [P2] shared"}
+	want := []string{"ze-2 [P2] shared"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("List(zen, true) after Remove = %#v, want %#v", got, want)
 	}

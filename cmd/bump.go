@@ -20,17 +20,28 @@ var bumpCmd = &cobra.Command{
 			return fmt.Errorf("usage: tix bump [id] [priority]")
 		}
 
-		id, err1 := strconv.Atoi(args[0])
-		priority, err2 := strconv.Atoi(args[1])
-		if err1 != nil || err2 != nil {
+		id, err := tix.ResolveRef(args[0])
+		if err != nil {
+			return err
+		}
+		priority, err := strconv.Atoi(args[1])
+		if err != nil {
 			return fmt.Errorf("usage: tix bump [id] [priority]")
 		}
 
-		id, priority, err := tix.Bump(id, priority)
+		ticket, err := tix.Show(id)
+		if err != nil {
+			return err
+		}
+		id, priority, err = tix.Bump(id, priority)
 		if err != nil {
 			return fmt.Errorf("bump failed: %w", err)
 		}
-		fmt.Printf("#%d -> P%d\n", id, priority)
+		prefix, err := tix.PrefixFor(ticket.Project)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s -> P%d\n", tix.FormatID(prefix, id), priority)
 		return nil
 	},
 }

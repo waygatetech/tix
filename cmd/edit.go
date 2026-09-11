@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 
 	"github.com/spf13/cobra"
 	"github.com/waygatetech/tix/internal/tix"
@@ -28,9 +27,9 @@ var editCmd = &cobra.Command{
 	Short: "Edit a ticket's fields",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		id, err := strconv.Atoi(args[0])
+		id, err := tix.ResolveRef(args[0])
 		if err != nil {
-			return fmt.Errorf("invalid id: %s", args[0])
+			return err
 		}
 
 		if editBody != "" && editBodyFile != "" {
@@ -70,7 +69,12 @@ var editCmd = &cobra.Command{
 			return printJSON(ticket, compactOutput, fieldsOutput)
 		}
 
-		fmt.Printf("#%d [P%d] %s (%s, %s)\n", ticket.ID, ticket.Priority, ticket.Title, ticket.Status, ticket.Project)
+		prefix, err := tix.PrefixFor(ticket.Project)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s [P%d] %s (%s, %s)\n",
+			tix.FormatID(prefix, ticket.ID), ticket.Priority, ticket.Title, ticket.Status, ticket.Project)
 		if ticket.Body != "" {
 			fmt.Println(ticket.Body)
 		}
