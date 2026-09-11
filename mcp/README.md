@@ -14,12 +14,9 @@ It calls the same `internal/tix` library functions the CLI uses, and talks to th
 | `tix_list`       | List tickets in a project, optionally filtered by status/priority. |
 | `tix_show`       | Show a single ticket by id.                                        |
 | `tix_edit`       | Edit fields of an existing ticket.                                 |
-| `tix_done`       | Mark a ticket as done.                                              |
-| `tix_bump`       | Change a ticket's priority.                                        |
-| `tix_rm`         | Delete a ticket from a project.                                    |
-| `tix_next`       | Show the next open ticket to work on in a project.                 |
-| `tix_claim_next` | Atomically claim the next open ticket in a project.                |
 | `tix_projects`   | List all projects with ticket counts per status.                   |
+
+That is the authoring half of the workflow and nothing else: write a ticket down, read it back, correct it. Claiming and closing belong to whoever does the work, so `claim-next`, `done`, and `rm` stay on the CLI — a client here would otherwise be able to close tickets it never touched. `tix_edit` can still set a status when a ticket genuinely needs one changed by hand, and it covers re-prioritizing too, which is why there is no separate `bump` tool.
 | `tix_project_add`| Create a new project.                                              |
 
 The `project` argument of every tool is resolved against the projects that exist, ignoring case and punctuation: `Front-End` reaches the project named `frontend`, and a name that matches nothing is an error listing the real project names. That is what keeps an invented spelling from becoming a fifth project whose tickets nobody else sees.

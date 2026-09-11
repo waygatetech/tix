@@ -287,7 +287,7 @@ mkfifo "$mcp_in"
   # hold the pipe open until the reply lands; on EOF the server shuts down
   # without answering
   for _ in $(seq 1 50); do
-    grep -qF '"tix_claim_next"' "$mcp_out" && break
+    grep -qF '"tix_projects"' "$mcp_out" && break
     sleep 0.1
   done
 } >"$mcp_in" &
@@ -295,7 +295,13 @@ mkfifo "$mcp_in"
 wait
 
 check "mcp answers initialize over stdio" '"serverInfo":{"name":"tix"' cat "$mcp_out"
-check "mcp advertises ticket tools" '"name":"tix_claim_next"' cat "$mcp_out"
+check "mcp advertises ticket tools" '"name":"tix_projects"' cat "$mcp_out"
+
+# the MCP surface is the authoring set only; claiming and closing stay on the
+# CLI so a client cannot close tickets it never worked on
+for cut in tix_claim_next tix_done tix_rm tix_next tix_bump tix_project_add; do
+  check_absent "mcp does not advertise $cut" "\"name\":\"$cut\"" cat "$mcp_out"
+done
 
 # a recorded repo path makes --project unnecessary inside that checkout, which
 # is the common case now that one database holds every repo's backlog

@@ -9,7 +9,12 @@ import (
 	"github.com/waygatetech/tix/internal/tix"
 )
 
-// NewServer builds an MCP server with one tool per tix ticket operation.
+// NewServer builds an MCP server exposing tix's authoring operations as tools.
+//
+// The set is deliberately narrow: writing tickets down, reading them back, and
+// correcting them. Claiming and closing tickets belong to whoever does the
+// work, so tix_claim_next, tix_done, and tix_rm stay on the CLI rather than
+// letting a client here close tickets it never worked on.
 func NewServer() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "tix", Version: "0.1.0"}, nil)
 
@@ -18,11 +23,6 @@ func NewServer() *mcp.Server {
 		Description: "Create a new ticket in a project. The project must already exist; " +
 			"call tix_projects to see the names, or pass create=true to make a new one.",
 	}, addTool)
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "tix_project_add",
-		Description: "Create a new project.",
-	}, projectAddTool)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tix_list",
@@ -38,31 +38,6 @@ func NewServer() *mcp.Server {
 		Name:        "tix_edit",
 		Description: "Edit fields of an existing ticket. Only fields provided are changed.",
 	}, editTool)
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "tix_done",
-		Description: "Mark a ticket as done.",
-	}, doneTool)
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "tix_bump",
-		Description: "Change a ticket's priority.",
-	}, bumpTool)
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "tix_rm",
-		Description: "Delete a ticket from a project.",
-	}, rmTool)
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "tix_next",
-		Description: "Show the next open ticket to work on in a project, ordered by priority.",
-	}, nextTool)
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "tix_claim_next",
-		Description: "Atomically claim the next open ticket in a project, marking it in_progress.",
-	}, claimNextTool)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tix_projects",
@@ -146,24 +121,6 @@ func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.Call
 	return nil, addOut{ID: id, Title: args.Title, Priority: priority, Project: project}, nil
 }
 
-type projectAddArgs struct {
-	Name     string `json:"name" jsonschema:"the project name"`
-	Key      string `json:"key,omitempty" jsonschema:"pin the ticket ID prefix instead of deriving it from the name"`
-	RepoPath string `json:"repo_path,omitempty" jsonschema:"path to the project's repository"`
-}
-
-func projectAddTool(_ context.Context, _ *mcp.CallToolRequest, args projectAddArgs) (*mcp.CallToolResult, tix.Project, error) {
-	project, err := tix.CreateProject(tix.Project{
-		Name:     args.Name,
-		Key:      args.Key,
-		RepoPath: args.RepoPath,
-	})
-	if err != nil {
-		return nil, tix.Project{}, err
-	}
-	return nil, project, nil
-}
-
 type listArgs struct {
 	Project  string `json:"project" jsonschema:"the project to list tickets for"`
 	All      bool   `json:"all,omitempty" jsonschema:"include tickets in all statuses, not just open ones"`
@@ -231,90 +188,6 @@ func editTool(_ context.Context, _ *mcp.CallToolRequest, args editArgs) (*mcp.Ca
 	})
 	if err != nil {
 		return nil, ticketOut{}, fmt.Errorf("edit failed: %w", err)
-	}
-	return nil, toTicketOut(ticket), nil
-}
-
-type doneArgs struct {
-	ID int `json:"id" jsonschema:"the ticket id"`
-}
-
-type doneOut struct {
-	ID     int    `json:"id"`
-	Status string `json:"status"`
-}
-
-func doneTool(_ context.Context, _ *mcp.CallToolRequest, args doneArgs) (*mcp.CallToolResult, doneOut, error) {
-	if err := tix.Done(args.ID); err != nil {
-		return nil, doneOut{}, fmt.Errorf("done failed: %w", err)
-	}
-	return nil, doneOut{ID: args.ID, Status: "done"}, nil
-}
-
-type bumpArgs struct {
-	ID       int `json:"id" jsonschema:"the ticket id"`
-	Priority int `json:"priority" jsonschema:"the new priority"`
-}
-
-type bumpOut struct {
-	ID       int `json:"id"`
-	Priority int `json:"priority"`
-}
-
-func bumpTool(_ context.Context, _ *mcp.CallToolRequest, args bumpArgs) (*mcp.CallToolResult, bumpOut, error) {
-	id, priority, err := tix.Bump(args.ID, args.Priority)
-	if err != nil {
-		return nil, bumpOut{}, fmt.Errorf("bump failed: %w", err)
-	}
-	return nil, bumpOut{ID: id, Priority: priority}, nil
-}
-
-type rmArgs struct {
-	ID      int    `json:"id" jsonschema:"the ticket id"`
-	Project string `json:"project" jsonschema:"the project the ticket belongs to"`
-}
-
-type rmOut struct {
-	ID      int  `json:"id"`
-	Removed bool `json:"removed"`
-}
-
-func rmTool(_ context.Context, _ *mcp.CallToolRequest, args rmArgs) (*mcp.CallToolResult, rmOut, error) {
-	if args.Project == "" {
-		return nil, rmOut{}, fmt.Errorf("project is required")
-	}
-	if err := tix.Remove(args.ID, args.Project); err != nil {
-		return nil, rmOut{}, fmt.Errorf("remove failed: %w", err)
-	}
-	return nil, rmOut{ID: args.ID, Removed: true}, nil
-}
-
-type nextArgs struct {
-	Project string `json:"project" jsonschema:"the project to find the next ticket in"`
-}
-
-func nextTool(_ context.Context, _ *mcp.CallToolRequest, args nextArgs) (*mcp.CallToolResult, ticketOut, error) {
-	if args.Project == "" {
-		return nil, ticketOut{}, fmt.Errorf("project is required")
-	}
-	ticket, err := tix.NextTicket(args.Project)
-	if err != nil {
-		return nil, ticketOut{}, err
-	}
-	return nil, toTicketOut(ticket), nil
-}
-
-type claimNextArgs struct {
-	Project string `json:"project" jsonschema:"the project to claim the next ticket from"`
-}
-
-func claimNextTool(_ context.Context, _ *mcp.CallToolRequest, args claimNextArgs) (*mcp.CallToolResult, ticketOut, error) {
-	if args.Project == "" {
-		return nil, ticketOut{}, fmt.Errorf("project is required")
-	}
-	ticket, err := tix.ClaimNext(args.Project)
-	if err != nil {
-		return nil, ticketOut{}, err
 	}
 	return nil, toTicketOut(ticket), nil
 }
