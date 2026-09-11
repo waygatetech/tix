@@ -11,13 +11,32 @@ It calls the same `internal/tix` library functions the CLI uses, and talks to th
 | Tool             | Description                                                        |
 | ---------------- | ------------------------------------------------------------------- |
 | `tix_add`        | Create a new ticket in an existing project (`create: true` makes a new one). |
+| `tix_add_batch`  | Create several tickets in one project in a single call.            |
 | `tix_list`       | List tickets in a project, optionally filtered by status/priority. |
 | `tix_show`       | Show a single ticket by id.                                        |
 | `tix_edit`       | Edit fields of an existing ticket.                                 |
 | `tix_projects`   | List all projects with ticket counts per status.                   |
 
 That is the authoring half of the workflow and nothing else: write a ticket down, read it back, correct it. Claiming and closing belong to whoever does the work, so `claim-next`, `done`, and `rm` stay on the CLI — a client here would otherwise be able to close tickets it never touched. `tix_edit` can still set a status when a ticket genuinely needs one changed by hand, and it covers re-prioritizing too, which is why there is no separate `bump` tool.
-| `tix_project_add`| Create a new project.                                              |
+
+## Batching
+
+A brainstorm rarely ends with one ticket. `tix_add_batch` takes the whole list — `{"project": "tix", "tickets": [{"title": …, "body": …, "priority": …}, …]}` — and writes it in one round trip instead of one per ticket, which is where the latency and tokens actually go:
+
+```json
+{
+  "project": "tix",
+  "create": false,
+  "tickets": [
+    { "title": "Add tix_add_batch", "body": "Six tickets, six round trips.", "priority": 1 },
+    { "title": "Document the batch tool", "body": "The README lists tools one per row." }
+  ]
+}
+```
+
+Every ticket in a batch lands in the same project; move one afterwards with `tix_edit` if it belongs elsewhere. The reply lists each new ticket's id alongside the resolved project name and a `created` count.
+
+A batch is validated whole before anything is written, so a missing title in the fifth ticket rejects the call naming `tickets[4]` and leaves no half-written batch behind — and no newly created project either, even with `create: true`. If a write does fail partway (a database error rather than bad input), the error says how many tickets already landed and the payload still lists them, so the retry can skip those instead of duplicating them.
 
 The `project` argument of every tool is resolved against the projects that exist, ignoring case and punctuation: `Front-End` reaches the project named `frontend`, and a name that matches nothing is an error listing the real project names. That is what keeps an invented spelling from becoming a fifth project whose tickets nobody else sees.
 

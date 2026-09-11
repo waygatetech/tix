@@ -25,6 +25,14 @@ func NewServer() *mcp.Server {
 	}, addTool)
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name: "tix_add_batch",
+		Description: "Create several tickets in one project in a single call. Use this " +
+			"instead of repeated tix_add whenever a session produces more than one " +
+			"ticket. The project must already exist; call tix_projects to see the " +
+			"names, or pass create=true to make a new one.",
+	}, addBatchTool)
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tix_list",
 		Description: "List tickets in a project, optionally filtered by status/priority.",
 	}, listTool)
@@ -92,25 +100,8 @@ func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.Call
 	if args.Project == "" {
 		return nil, addOut{}, fmt.Errorf("project is required")
 	}
-	priority := 2
-	if args.Priority != nil {
-		priority = *args.Priority
-	}
-	if priority < 0 || priority > 5 {
-		priority = 2
-	}
-	// Resolving here rather than leaning on tix.Add means the reply names the
-	// project the ticket actually landed in, so a caller that guessed at the
-	// spelling learns the real one.
-	var (
-		project string
-		err     error
-	)
-	if args.Create {
-		project, _, err = tix.EnsureProject(args.Project)
-	} else {
-		project, err = tix.ResolveProject(args.Project)
-	}
+	priority := normalizePriority(args.Priority)
+	project, err := resolveProject(args.Project, args.Create)
 	if err != nil {
 		return nil, addOut{}, err
 	}
@@ -119,6 +110,82 @@ func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.Call
 		return nil, addOut{}, fmt.Errorf("add failed: %w", err)
 	}
 	return nil, addOut{ID: id, Title: args.Title, Priority: priority, Project: project}, nil
+}
+
+// normalizePriority defaults a missing priority and clamps an out-of-range one
+// rather than rejecting it, so one odd number in a batch does not cost the
+// caller a round trip.
+func normalizePriority(priority *int) int {
+	if priority == nil || *priority < 0 || *priority > 5 {
+		return 2
+	}
+	return *priority
+}
+
+// resolveProject resolves here rather than leaning on tix.Add so the reply
+// names the project the tickets actually landed in, letting a caller that
+// guessed at the spelling learn the real one.
+func resolveProject(name string, create bool) (string, error) {
+	if create {
+		project, _, err := tix.EnsureProject(name)
+		return project, err
+	}
+	return tix.ResolveProject(name)
+}
+
+type batchTicket struct {
+	Title    string `json:"title" jsonschema:"the ticket title"`
+	Body     string `json:"body" jsonschema:"the ticket body/description"`
+	Priority *int   `json:"priority,omitempty" jsonschema:"priority 0-5, lower is more urgent (default 2)"`
+}
+
+type addBatchArgs struct {
+	Tickets []batchTicket `json:"tickets" jsonschema:"the tickets to create, in order"`
+	Project string        `json:"project" jsonschema:"the project every ticket in the batch belongs to; must be an existing project unless create is true"`
+	Create  bool          `json:"create,omitempty" jsonschema:"create the project if it does not exist yet"`
+}
+
+type addBatchOut struct {
+	Tickets []addOut `json:"tickets"`
+	Project string   `json:"project"`
+	Created int      `json:"created"`
+}
+
+func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) (*mcp.CallToolResult, addBatchOut, error) {
+	if len(args.Tickets) == 0 {
+		return nil, addBatchOut{}, fmt.Errorf("tickets is required and must not be empty")
+	}
+	if args.Project == "" {
+		return nil, addBatchOut{}, fmt.Errorf("project is required")
+	}
+	// Validate the whole batch before writing any of it: a batch that is going
+	// to be rejected should be rejected whole, not half-inserted.
+	for i, ticket := range args.Tickets {
+		if ticket.Title == "" {
+			return nil, addBatchOut{}, fmt.Errorf("tickets[%d]: title is required", i)
+		}
+		if ticket.Body == "" {
+			return nil, addBatchOut{}, fmt.Errorf("tickets[%d]: body is required", i)
+		}
+	}
+	project, err := resolveProject(args.Project, args.Create)
+	if err != nil {
+		return nil, addBatchOut{}, err
+	}
+
+	out := addBatchOut{Project: project, Tickets: make([]addOut, 0, len(args.Tickets))}
+	for i, ticket := range args.Tickets {
+		priority := normalizePriority(ticket.Priority)
+		id, err := tix.Add(ticket.Title, ticket.Body, priority, project)
+		if err != nil {
+			// Report what did land so the caller can retry the rest instead of
+			// re-sending the whole batch and duplicating tickets.
+			return nil, out, fmt.Errorf("add failed for tickets[%d] (%d of %d already created): %w", i, len(out.Tickets), len(args.Tickets), err)
+		}
+		out.Tickets = append(out.Tickets, addOut{ID: id, Title: ticket.Title, Priority: priority, Project: project})
+	}
+	out.Created = len(out.Tickets)
+	return nil, out, nil
 }
 
 type listArgs struct {

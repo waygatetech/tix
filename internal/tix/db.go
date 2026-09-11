@@ -41,6 +41,16 @@ func InitDB() error {
 	return nil
 }
 
+// CloseDB closes the open database, if any, so a caller outside this package
+// can hand the next InitDB a clean slate — what a test pointing TIX_DB at a
+// fresh temporary file between cases needs.
+func CloseDB() {
+	if db != nil {
+		_ = db.Close()
+		db = nil
+	}
+}
+
 // migrations takes the database from one schema version to the next: entry i
 // upgrades user_version from i to i+1, so len(migrations) is the version this
 // binary expects. Append only — once an entry has shipped, editing it leaves
