@@ -2,6 +2,7 @@ package tix
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +27,92 @@ func TestInitDBAppliesConcurrencyPragmas(t *testing.T) {
 	}
 	if timeout != 5000 {
 		t.Errorf("busy_timeout = %d, want 5000", timeout)
+	}
+}
+
+func TestInitDBRecordsSchemaVersion(t *testing.T) {
+	setupTestDB(t)
+
+	version, err := schemaVersion()
+	if err != nil {
+		t.Fatalf("schemaVersion: %v", err)
+	}
+	if version != len(migrations) {
+		t.Errorf("user_version = %d, want %d", version, len(migrations))
+	}
+}
+
+// A database created before migrations existed reports version 0 but already
+// has the tickets table and its rows. Migrating it must bring the version
+// forward without disturbing what is there.
+func TestMigrateUpgradesPreMigrationDatabase(t *testing.T) {
+	setupTestDB(t)
+
+	if _, err := Add("existing ticket", "", 2, "acme"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA user_version = 0`); err != nil {
+		t.Fatalf("reset user_version: %v", err)
+	}
+
+	if err := migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	version, err := schemaVersion()
+	if err != nil {
+		t.Fatalf("schemaVersion: %v", err)
+	}
+	if version != len(migrations) {
+		t.Errorf("user_version = %d, want %d", version, len(migrations))
+	}
+	if lines := List("acme", false); len(lines) != 1 {
+		t.Errorf("got %d tickets after migrating, want 1: %v", len(lines), lines)
+	}
+}
+
+// Running an older binary against a newer database must fail loudly rather
+// than issue queries against columns it does not know about.
+func TestMigrateRejectsNewerSchema(t *testing.T) {
+	setupTestDB(t)
+
+	future := len(migrations) + 1
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, future)); err != nil {
+		t.Fatalf("set user_version: %v", err)
+	}
+
+	err := migrate()
+	if err == nil {
+		t.Fatal("migrate() = nil, want an error for a newer schema")
+	}
+	if !strings.Contains(err.Error(), "newer than this tix understands") {
+		t.Errorf("migrate() error = %q, want it to mention a newer schema", err)
+	}
+}
+
+// A failing migration must leave the version untouched, so the next run
+// retries it instead of skipping past a schema change that never landed.
+func TestApplyMigrationLeavesVersionUnchangedOnFailure(t *testing.T) {
+	setupTestDB(t)
+
+	original := migrations
+	t.Cleanup(func() { migrations = original })
+	migrations = append(append([]string{}, original...), `THIS IS NOT SQL`)
+
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, len(original))); err != nil {
+		t.Fatalf("set user_version: %v", err)
+	}
+
+	if err := migrate(); err == nil {
+		t.Fatal("migrate() = nil, want an error for a broken migration")
+	}
+
+	version, err := schemaVersion()
+	if err != nil {
+		t.Fatalf("schemaVersion: %v", err)
+	}
+	if version != len(original) {
+		t.Errorf("user_version = %d after a failed migration, want %d", version, len(original))
 	}
 }
 

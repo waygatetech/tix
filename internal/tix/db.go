@@ -2,7 +2,6 @@ package tix
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,16 +34,21 @@ func InitDB() {
 	// connection keeps this process from contending with itself.
 	db.SetMaxOpenConns(1)
 
-	exists, err := ticketsTableExists()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "schema check failed:", err)
+	if err := migrate(); err != nil {
+		fmt.Fprintln(os.Stderr, "schema migration failed:", err)
 		os.Exit(1)
 	}
-	if exists {
-		return
-	}
-	schema := `
-	CREATE TABLE IF NOT EXISTS tickets (
+}
+
+// migrations takes the database from one schema version to the next: entry i
+// upgrades user_version from i to i+1, so len(migrations) is the version this
+// binary expects. Append only — once an entry has shipped, editing it leaves
+// already-migrated databases with a schema nothing will fix.
+//
+// Databases created before migrations existed report user_version 0 but
+// already have the tickets table, so entry 0 is written to be a no-op there.
+var migrations = []string{
+	`CREATE TABLE IF NOT EXISTS tickets (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		title TEXT NOT NULL,
 		body TEXT DEFAULT '',
@@ -53,11 +57,58 @@ func InitDB() {
 		order_rank INTEGER NOT NULL DEFAULT 0,
 		project TEXT NOT NULL DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);`
-	if _, err := db.Exec(schema); err != nil {
-		fmt.Fprintln(os.Stderr, "schema init failed:", err)
-		os.Exit(1)
+	);`,
+}
+
+// migrate applies every migration the database has not seen yet. The version
+// check is a read, so an up-to-date database never takes a write lock here:
+// running schema statements on every invocation made read-only commands fail
+// while another process was writing.
+func migrate() error {
+	version, err := schemaVersion()
+	if err != nil {
+		return err
 	}
+	if version > len(migrations) {
+		return fmt.Errorf(
+			"database schema version %d is newer than this tix understands (%d); upgrade tix",
+			version, len(migrations),
+		)
+	}
+	for i := version; i < len(migrations); i++ {
+		if err := applyMigration(i); err != nil {
+			return fmt.Errorf("migration %d: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
+// applyMigration runs migration i and records the new version atomically, so a
+// crash mid-migration leaves the database on the version it started from.
+func applyMigration(i int) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(migrations[i]); err != nil {
+		return err
+	}
+	// PRAGMA does not accept bound parameters; i is an int, so formatting it
+	// cannot inject anything.
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, i+1)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func schemaVersion() (int, error) {
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return 0, err
+	}
+	return version, nil
 }
 
 // dsn builds the driver connection string. The pragmas are applied to every
@@ -72,21 +123,4 @@ func InitDB() {
 //     retry.
 func dsn(path string) string {
 	return path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_txlock=immediate"
-}
-
-// ticketsTableExists reports whether the schema is already in place. Running
-// CREATE TABLE on every invocation takes a write lock, which makes read-only
-// commands fail while another process is writing.
-func ticketsTableExists() (bool, error) {
-	var name string
-	err := db.QueryRow(
-		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tickets'`,
-	).Scan(&name)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
 }
