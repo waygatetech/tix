@@ -197,6 +197,31 @@ fi
 
 check_absent "parallel commands never report a locked database" "database is locked" cat "$tmp"/claim.*.out "$tmp"/add.*.out
 
+# mcp: the server ships on the tix binary itself, so a release install can run it
+check "mcp subcommand is registered" "Run an MCP server" "$tmp/tix" --help
+
+mcp_in="$tmp/mcp.in"
+mcp_out="$tmp/mcp.out"
+mkfifo "$mcp_in"
+: >"$mcp_out"
+{
+  printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"e2e","version":"1"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+  # hold the pipe open until the reply lands; on EOF the server shuts down
+  # without answering
+  for _ in $(seq 1 50); do
+    grep -qF '"tix_claim_next"' "$mcp_out" && break
+    sleep 0.1
+  done
+} >"$mcp_in" &
+"$tmp/tix" mcp <"$mcp_in" >"$mcp_out" 2>&1
+wait
+
+check "mcp answers initialize over stdio" '"serverInfo":{"name":"tix"' cat "$mcp_out"
+check "mcp advertises ticket tools" '"name":"tix_claim_next"' cat "$mcp_out"
+
 # graceful failures
 check_status "init-agent without project exits non-zero" 1 "$tmp/tix" init-agent
 check "list requires --project" 'required flag(s) "project" not set' "$tmp/tix" list

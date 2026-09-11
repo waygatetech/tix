@@ -1,6 +1,8 @@
 # tix MCP server
 
-`tix-mcp` exposes `tix`'s ticket operations as [MCP](https://modelcontextprotocol.io) tools over stdio, so agents like Claude Desktop can create, list, and edit tickets directly instead of shelling out to the `tix` CLI.
+`tix mcp` exposes `tix`'s ticket operations as [MCP](https://modelcontextprotocol.io) tools over stdio, so agents like Claude Desktop can create, list, and edit tickets directly instead of shelling out to the `tix` CLI.
+
+It is a subcommand of the `tix` binary, so every released build already has it — nothing extra to install or compile.
 
 It calls the same `internal/tix` library functions the CLI uses, and talks to the same SQLite database (`~/.tix/tix.db` by default, or `TIX_DB` if set).
 
@@ -21,26 +23,22 @@ It calls the same `internal/tix` library functions the CLI uses, and talks to th
 
 Each tool returns compact JSON (both as structured content and as its text representation) rather than the CLI's human-formatted, colorized output.
 
-## Build
-
-```sh
-go build -o tix-mcp ./mcp/cmd/tix-mcp
-```
-
 ## Register with Claude Desktop
 
-Add the built binary to Claude Desktop's config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+Install `tix` (see the [main README](../README.md#install)), then point Claude Desktop's config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS) at the binary with the `mcp` subcommand:
 
 ```json
 {
   "mcpServers": {
     "tix": {
-      "command": "/absolute/path/to/tix-mcp",
-      "args": []
+      "command": "/absolute/path/to/tix",
+      "args": ["mcp"]
     }
   }
 }
 ```
+
+Use an absolute path — Claude Desktop does not inherit your shell's `PATH`. `which tix` prints it.
 
 To point it at a specific database instead of the default `~/.tix/tix.db`, set `TIX_DB` in the server's environment:
 
@@ -48,8 +46,8 @@ To point it at a specific database instead of the default `~/.tix/tix.db`, set `
 {
   "mcpServers": {
     "tix": {
-      "command": "/absolute/path/to/tix-mcp",
-      "args": [],
+      "command": "/absolute/path/to/tix",
+      "args": ["mcp"],
       "env": {
         "TIX_DB": "/absolute/path/to/tix.db"
       }

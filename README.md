@@ -77,6 +77,7 @@ tix done 1
 - `tix done [id]` — mark a ticket done.
 - `tix rm [id] --project NAME` — remove a ticket from a project.
 - `tix best-practices [--json] [--compact] [--fields FIELDS]` — print terse workflow guidance, handy for scripting or onboarding an AI agent.
+- `tix mcp` — run an MCP server on stdio exposing the ticket operations as tools, for MCP clients like Claude Desktop. See [mcp/README.md](mcp/README.md).
 - `tix init-agent PROJECT [--db PATH]` — append idempotent `tix` workflow guidance to `AGENTS.md` and `CLAUDE.md` at the current Git repository root (or the current directory), so coding agents know how to use `tix` in this repo.
 
 Priorities sort ascending, so `P0` appears before `P2`. Tickets with the same priority keep insertion order.
@@ -104,7 +105,7 @@ This is useful for keeping a project-local ticket database checked into a repo, 
 
 `tix` works well as a lightweight task queue for AI coding agents. Run `tix init-agent PROJECT` in a repo to add ready-to-use `tix` guidance to `AGENTS.md`/`CLAUDE.md`, or point an agent at `tix best-practices` for a terse cheat sheet it can follow (claim the next ticket, do the work, mark it done, repeat).
 
-`tix` also ships an MCP server so agents like Claude Desktop can call ticket operations directly as tools instead of shelling out to the CLI — see [mcp/README.md](mcp/README.md).
+`tix` also ships an MCP server as the `tix mcp` subcommand, so agents like Claude Desktop can call ticket operations directly as tools instead of shelling out to the CLI. No extra binary to install — see [mcp/README.md](mcp/README.md).
 
 ## Development
 
