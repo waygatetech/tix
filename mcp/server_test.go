@@ -82,22 +82,50 @@ func TestNewServerCarriesInstructions(t *testing.T) {
 	// The instructions only matter if they reach the client, which is what a
 	// server built with nil options never did.
 	ctx := context.Background()
+	clientSession := connect(t, ctx)
+
+	if got := clientSession.InitializeResult().Instructions; !strings.Contains(got, "frontend") {
+		t.Fatalf("instructions the client received = %q, want them to list project %q", got, "frontend")
+	}
+}
+
+// connect wires a client to a server over the in-memory transport and hands
+// back the client session, closing both when the test ends.
+func connect(t *testing.T, ctx context.Context) *mcpsdk.ClientSession {
+	t.Helper()
+
 	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
-	serverSession, err := NewServer().Connect(ctx, serverTransport, nil)
+	serverSession, err := NewServer(testVersion).Connect(ctx, serverTransport, nil)
 	if err != nil {
 		t.Fatalf("server connect: %v", err)
 	}
-	defer serverSession.Close()
+	t.Cleanup(func() { serverSession.Close() })
 
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test", Version: "0.0.1"}, nil)
 	clientSession, err := client.Connect(ctx, clientTransport, nil)
 	if err != nil {
 		t.Fatalf("client connect: %v", err)
 	}
-	defer clientSession.Close()
+	t.Cleanup(func() { clientSession.Close() })
+	return clientSession
+}
 
-	if got := clientSession.InitializeResult().Instructions; !strings.Contains(got, "frontend") {
-		t.Fatalf("instructions the client received = %q, want them to list project %q", got, "frontend")
+// testVersion is deliberately not a plausible release number, so a test that
+// passes cannot be one that matched a literal left in the server.
+const testVersion = "v9.9.9-test"
+
+// TestServerReportsTheBuildVersion pins the version to what the caller passed:
+// it used to be written in the source, where it would have gone stale against
+// the release tags the first time one was cut past it.
+func TestServerReportsTheBuildVersion(t *testing.T) {
+	setupTestDB(t)
+
+	got := connect(t, context.Background()).InitializeResult().ServerInfo
+	if got.Name != "tix" {
+		t.Errorf("serverInfo name = %q, want %q", got.Name, "tix")
+	}
+	if got.Version != testVersion {
+		t.Errorf("serverInfo version = %q, want the version passed to NewServer, %q", got.Version, testVersion)
 	}
 }
 
@@ -233,19 +261,7 @@ func TestNoToolDeclaresAnOutputSchema(t *testing.T) {
 	setupTestDB(t)
 
 	ctx := context.Background()
-	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
-	serverSession, err := NewServer().Connect(ctx, serverTransport, nil)
-	if err != nil {
-		t.Fatalf("server connect: %v", err)
-	}
-	defer serverSession.Close()
-
-	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test", Version: "0.0.1"}, nil)
-	clientSession, err := client.Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatalf("client connect: %v", err)
-	}
-	defer clientSession.Close()
+	clientSession := connect(t, ctx)
 
 	tools, err := clientSession.ListTools(ctx, nil)
 	if err != nil {
@@ -321,6 +337,194 @@ func TestToolsRenderPlainText(t *testing.T) {
 	}
 	if got, want := resultText(t, res), "acme done=1 open=1 total=2"; got != want {
 		t.Errorf("projects reply = %q, want %q", got, want)
+	}
+}
+
+// TestAddRejectsIncompleteTickets covers the validation addTool does before it
+// writes anything: a ticket missing one of these is one nobody can act on
+// later, and a project nobody created is where a ticket goes to be lost.
+func TestAddRejectsIncompleteTickets(t *testing.T) {
+	setupTestDB(t)
+
+	for _, tc := range []struct {
+		name string
+		args addArgs
+		want string
+	}{
+		{
+			name: "no title",
+			args: addArgs{Body: "b", Project: "acme", Create: true},
+			want: "title is required",
+		},
+		{
+			name: "no body",
+			args: addArgs{Title: "t", Project: "acme", Create: true},
+			want: "body is required",
+		},
+		{
+			name: "no project",
+			args: addArgs{Title: "t", Body: "b"},
+			want: "project is required",
+		},
+		{
+			name: "unknown project",
+			args: addArgs{Title: "t", Body: "b", Project: "nope"},
+			want: "nope",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := addTool(context.Background(), nil, tc.args)
+			if err == nil {
+				t.Fatalf("addTool succeeded, want error containing %q", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %q, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+
+	// A rejected add writes nothing, and never creates the project on the way.
+	projects, err := tix.Projects()
+	if err != nil {
+		t.Fatalf("Projects: %v", err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("got %d projects, want none created by rejected adds", len(projects))
+	}
+}
+
+func TestListFiltersAndLimits(t *testing.T) {
+	setupTestDB(t)
+
+	ctx := context.Background()
+	for _, ticket := range []struct {
+		title    string
+		priority int
+	}{{"urgent", 0}, {"normal", 2}, {"later", 4}} {
+		if _, _, err := addTool(ctx, nil, addArgs{
+			Title: ticket.title, Body: "b", Priority: ptr(ticket.priority), Project: "acme", Create: true,
+		}); err != nil {
+			t.Fatalf("addTool(%q): %v", ticket.title, err)
+		}
+	}
+	done := "done"
+	if _, _, err := editTool(ctx, nil, editArgs{ID: 2, Status: &done}); err != nil {
+		t.Fatalf("editTool: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args listArgs
+		want string
+	}{
+		{
+			name: "open only by default",
+			args: listArgs{Project: "acme"},
+			want: "1 [P0] urgent\n3 [P4] later",
+		},
+		{
+			name: "status filter",
+			args: listArgs{Project: "acme", All: true, Status: "done"},
+			want: "x 2 [P2] normal",
+		},
+		{
+			name: "priority filter",
+			args: listArgs{Project: "acme", Priority: ptr(4)},
+			want: "3 [P4] later",
+		},
+		{
+			name: "limit",
+			args: listArgs{Project: "acme", Limit: 1},
+			want: "1 [P0] urgent",
+		},
+		{
+			name: "filter matching nothing still says so",
+			args: listArgs{Project: "acme", Priority: ptr(5)},
+			want: "no tickets",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, _, err := listTool(ctx, nil, tc.args)
+			if err != nil {
+				t.Fatalf("listTool: %v", err)
+			}
+			if got := resultText(t, res); got != tc.want {
+				t.Errorf("list reply = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestToolsRejectBadArguments(t *testing.T) {
+	setupTestDB(t)
+
+	ctx := context.Background()
+	if _, _, err := addTool(ctx, nil, addArgs{
+		Title: "t", Body: "b", Project: "acme", Create: true,
+	}); err != nil {
+		t.Fatalf("addTool: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		call func() error
+		want string
+	}{
+		{
+			name: "list with no project",
+			call: func() error { _, _, err := listTool(ctx, nil, listArgs{}); return err },
+			want: "project is required",
+		},
+		{
+			// A negative limit is caught here rather than passed down, where it
+			// would silently mean something else.
+			name: "list with a negative limit",
+			call: func() error {
+				_, _, err := listTool(ctx, nil, listArgs{Project: "acme", Limit: -1})
+				return err
+			},
+			want: "limit must be >= 0",
+		},
+		{
+			name: "show an id that does not exist",
+			call: func() error { _, _, err := showTool(ctx, nil, showArgs{ID: 404}); return err },
+			want: "no such ticket: 404",
+		},
+		{
+			name: "edit an id that does not exist",
+			call: func() error {
+				title := "new"
+				_, _, err := editTool(ctx, nil, editArgs{ID: 404, Title: &title})
+				return err
+			},
+			want: "404",
+		},
+		{
+			// An edit naming no field at all is a call that meant to change
+			// something, so it is an error rather than a no-op reply.
+			name: "edit with no fields",
+			call: func() error { _, _, err := editTool(ctx, nil, editArgs{ID: 1}); return err },
+			want: "no fields to update",
+		},
+		{
+			name: "edit into a project that does not exist",
+			call: func() error {
+				project := "nope"
+				_, _, err := editTool(ctx, nil, editArgs{ID: 1, Project: &project})
+				return err
+			},
+			want: "nope",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+			if err == nil {
+				t.Fatalf("call succeeded, want error containing %q", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %q, want it to contain %q", err, tc.want)
+			}
+		})
 	}
 }
 

@@ -317,6 +317,9 @@ mkfifo "$mcp_in"
 wait
 
 check "mcp answers initialize over stdio" '"serverInfo":{"name":"tix"' cat "$mcp_out"
+# the version comes off the binary, so an unstamped build reports "dev" here
+# rather than a number written into the server that release tags would outrun
+check "mcp reports the binary's version" '"version":"dev"' cat "$mcp_out"
 check "mcp advertises ticket tools" '"name":"tix_projects"' cat "$mcp_out"
 
 # the MCP surface is the authoring set only; claiming and closing stay on the

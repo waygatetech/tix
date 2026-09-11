@@ -16,9 +16,13 @@ import (
 // correcting them. Claiming and closing tickets belong to whoever does the
 // work, so tix_claim_next, tix_done, and tix_rm stay on the CLI rather than
 // letting a client here close tickets it never worked on.
-func NewServer() *mcp.Server {
+//
+// The version is the binary's own, threaded from main rather than written here,
+// so what a client reads in serverInfo is the build it is talking to instead of
+// a literal that stops matching the release tags the first time one is cut.
+func NewServer(version string) *mcp.Server {
 	server := mcp.NewServer(
-		&mcp.Implementation{Name: "tix", Version: "0.1.0"},
+		&mcp.Implementation{Name: "tix", Version: version},
 		&mcp.ServerOptions{Instructions: instructions()},
 	)
 
