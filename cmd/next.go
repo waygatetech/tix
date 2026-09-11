@@ -8,8 +8,9 @@ import (
 )
 
 var nextCmd = &cobra.Command{
-	Use:   "next",
-	Short: "Show the next ticket",
+	Use:               "next",
+	Short:             "Show the next ticket",
+	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		project, err := projectScope()
 		if err != nil {

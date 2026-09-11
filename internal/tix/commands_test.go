@@ -16,7 +16,9 @@ func setupTestDB(t *testing.T) {
 	}
 
 	t.Setenv("TIX_DB", t.TempDir()+"/tix.db")
-	InitDB()
+	if err := InitDB(); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
 
 	t.Cleanup(func() {
 		if db != nil {

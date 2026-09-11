@@ -9,8 +9,9 @@ import (
 )
 
 var bumpCmd = &cobra.Command{
-	Use:   "bump",
-	Short: "Change a ticket's priority",
+	Use:               "bump",
+	Short:             "Change a ticket's priority",
+	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) != 2 {
 			return fmt.Errorf("usage: tix bump [id] [priority]")

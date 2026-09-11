@@ -8,8 +8,9 @@ import (
 )
 
 var doneCmd = &cobra.Command{
-	Use:   "done",
-	Short: "Mark a ticket as done",
+	Use:               "done",
+	Short:             "Mark a ticket as done",
+	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("usage: tix done [id]")

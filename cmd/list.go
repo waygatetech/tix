@@ -16,8 +16,9 @@ var priorityFilter string
 var limitFilter int
 
 var listCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List tickets",
+	Use:               "list",
+	Short:             "List tickets",
+	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		options, err := listOptions()
 		if err != nil {

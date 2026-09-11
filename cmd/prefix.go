@@ -17,7 +17,8 @@ var prefixCmd = &cobra.Command{
 from project names automatically; set one explicitly to pin it.
 
 With no arguments, lists every project's prefix.`,
-	Args: cobra.MaximumNArgs(2),
+	Args:              cobra.MaximumNArgs(2),
+	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 2 {
 			if err := tix.SetPrefix(args[0], args[1]); err != nil {

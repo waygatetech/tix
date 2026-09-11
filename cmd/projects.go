@@ -15,9 +15,10 @@ var projectKey string
 var projectRepoPath string
 
 var projectsCmd = &cobra.Command{
-	Use:   "projects",
-	Short: "List all projects",
-	Args:  cobra.NoArgs,
+	Use:               "projects",
+	Short:             "List all projects",
+	Args:              cobra.NoArgs,
+	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		projects, err := tix.Projects()
 		if err != nil {
@@ -38,9 +39,10 @@ var projectsCmd = &cobra.Command{
 // projectsAddCmd is the explicit way to create a project; `tix add --create`
 // covers the case where the first ticket and the project arrive together.
 var projectsAddCmd = &cobra.Command{
-	Use:   "add NAME",
-	Short: "Create a project",
-	Args:  cobra.ExactArgs(1),
+	Use:               "add NAME",
+	Short:             "Create a project",
+	Args:              cobra.ExactArgs(1),
+	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		repoPath, err := absRepoPath(projectRepoPath)
 		if err != nil {
@@ -73,7 +75,8 @@ var projectsSetRepoPathCmd = &cobra.Command{
 directory when it sits inside a registered repository.
 
 PATH defaults to the current directory.`,
-	Args: cobra.RangeArgs(1, 2),
+	Args:              cobra.RangeArgs(1, 2),
+	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path := "."
 		if len(args) == 2 {

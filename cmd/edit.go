@@ -19,9 +19,10 @@ var (
 )
 
 var editCmd = &cobra.Command{
-	Use:   "edit [id]",
-	Short: "Edit a ticket's fields",
-	Args:  cobra.ExactArgs(1),
+	Use:               "edit [id]",
+	Short:             "Edit a ticket's fields",
+	Args:              cobra.ExactArgs(1),
+	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		id, err := tix.ResolveRef(args[0])
 		if err != nil {

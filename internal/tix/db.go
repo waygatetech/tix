@@ -17,17 +17,18 @@ func dbPath() string {
 	return filepath.Join(home, ".tix", "tix.db")
 }
 
-func InitDB() {
+// InitDB opens the database and brings its schema up to date. It reports
+// failures instead of exiting so callers that only meant to open the database
+// on the way to real work can surface the error themselves.
+func InitDB() error {
 	path := dbPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		fmt.Fprintln(os.Stderr, "mkdir failed:", err)
-		os.Exit(1)
+		return fmt.Errorf("mkdir failed: %w", err)
 	}
 	var err error
 	db, err = sql.Open("sqlite", dsn(path))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "db open failed:", err)
-		os.Exit(1)
+		return fmt.Errorf("db open failed: %w", err)
 	}
 	// Agents in different repos share one database file, so writes are
 	// serialized in-process too: SQLite allows a single writer, and one
@@ -35,9 +36,9 @@ func InitDB() {
 	db.SetMaxOpenConns(1)
 
 	if err := migrate(); err != nil {
-		fmt.Fprintln(os.Stderr, "schema migration failed:", err)
-		os.Exit(1)
+		return fmt.Errorf("schema migration failed: %w", err)
 	}
+	return nil
 }
 
 // migrations takes the database from one schema version to the next: entry i

@@ -16,8 +16,9 @@ var bodyFile string
 var createProject bool
 
 var addCmd = &cobra.Command{
-	Use:   "add",
-	Short: "Add a ticket to the list",
+	Use:               "add",
+	Short:             "Add a ticket to the list",
+	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
 			return errors.New("ticket title is required")

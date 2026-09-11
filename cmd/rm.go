@@ -8,8 +8,9 @@ import (
 )
 
 var rmCmd = &cobra.Command{
-	Use:   "rm",
-	Short: "Remove a ticket from the list",
+	Use:               "rm",
+	Short:             "Remove a ticket from the list",
+	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
 			return fmt.Errorf("ticket id is required")

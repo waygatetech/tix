@@ -8,8 +8,9 @@ import (
 )
 
 var claimNextCmd = &cobra.Command{
-	Use:   "claim-next",
-	Short: "Claim the next open ticket",
+	Use:               "claim-next",
+	Short:             "Claim the next open ticket",
+	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		project, err := projectScope()
 		if err != nil {

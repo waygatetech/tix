@@ -67,6 +67,17 @@ check_status() {
 # releases stamp main.version through ldflags; an unstamped build says "dev"
 check "--version reports the build" "tix version dev" "$tmp/tix" --version
 
+# help, version, and completion never open the database, so they keep working
+# when the database path cannot be created
+: >"$tmp/not-a-dir"
+unusable_db="$tmp/not-a-dir/tix.db"
+check_status "--help works without a usable database" 0 env TIX_DB="$unusable_db" "$tmp/tix" --help
+check_status "--version works without a usable database" 0 env TIX_DB="$unusable_db" "$tmp/tix" --version
+check_status "completion works without a usable database" 0 env TIX_DB="$unusable_db" "$tmp/tix" completion bash
+check_status "help subcommand works without a usable database" 0 env TIX_DB="$unusable_db" "$tmp/tix" help list
+check "a ticket command reports the unusable database" "mkdir failed" env TIX_DB="$unusable_db" "$tmp/tix" list --project acme
+check_status "a ticket command fails on the unusable database" 1 env TIX_DB="$unusable_db" "$tmp/tix" list --project acme
+
 # projects are rows: a name has to be created before tickets can land in it,
 # either up front or with --create on the first ticket
 check "add --create defines project acme" "created project acme" "$tmp/tix" add --project acme "fix login bug" -b "users can't log in" --create

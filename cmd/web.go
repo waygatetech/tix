@@ -13,8 +13,9 @@ import (
 var webPort int
 
 var webCmd = &cobra.Command{
-	Use:   "web",
-	Short: "Serve a web view of tickets grouped by project",
+	Use:               "web",
+	Short:             "Serve a web view of tickets grouped by project",
+	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		http.HandleFunc("/", webHandler)
 		addr := fmt.Sprintf("localhost:%d", webPort)

@@ -3,12 +3,30 @@ package tix
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	_ "modernc.org/sqlite"
 )
+
+// An unusable database path is an error for the caller to report, not a reason
+// to exit the process: commands that never open the database still have to run.
+func TestInitDBReportsAnUnusableDatabasePath(t *testing.T) {
+	setupTestDB(t)
+
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, nil, 0644); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	t.Setenv("TIX_DB", filepath.Join(blocker, "tix.db"))
+
+	if err := InitDB(); err == nil {
+		t.Fatal("InitDB succeeded with a file where the database directory belongs")
+	}
+}
 
 func TestInitDBAppliesConcurrencyPragmas(t *testing.T) {
 	setupTestDB(t)
@@ -146,7 +164,9 @@ func TestInitDBReadsWhileAnotherConnectionWrites(t *testing.T) {
 		t.Fatalf("writer update: %v", err)
 	}
 
-	InitDB()
+	if err := InitDB(); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
 
 	lines := List("acme", false)
 	if len(lines) != 1 {
