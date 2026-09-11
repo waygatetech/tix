@@ -30,6 +30,9 @@ var bumpCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if err := requireProjectMatch(ticket, project); err != nil {
+			return err
+		}
 		id, priority, err = tix.Bump(id, priority)
 		if err != nil {
 			return fmt.Errorf("bump failed: %w", err)
@@ -38,11 +41,12 @@ var bumpCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s -> P%d\n", tix.FormatID(prefix, id), priority)
+		fmt.Printf("%s -> P%d %s\n", tix.FormatID(prefix, id), priority, ticketContext(ticket))
 		return nil
 	},
 }
 
 func init() {
+	bumpCmd.Flags().StringVarP(&project, "project", "p", "", "project the ticket must belong to (errors on mismatch)")
 	rootCmd.AddCommand(bumpCmd)
 }

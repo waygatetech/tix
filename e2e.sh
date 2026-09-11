@@ -196,8 +196,29 @@ check_status "wrong-project id exits non-zero" 1 "$tmp/tix" show ze-1
 check "prefix lists derived prefixes" "acme ac" "$tmp/tix" prefix
 check "prefix reports one project" "zen ze" "$tmp/tix" prefix zen
 
-check "rm removes a ticket" "ac-2 removed" "$tmp/tix" rm 2 --project acme
-check "done marks a ticket" "ac-1 done" "$tmp/tix" done 1
+# a bare id names no project, so mutations say which backlog they touched and
+# an explicit --project must agree with the ticket instead of being ignored
+check "show accepts a matching --project" "fix login bug" "$tmp/tix" show 1 --project acme
+check "show rejects a mismatched --project" 'belongs to project "acme"' "$tmp/tix" show 1 --project zen
+check_status "mismatched --project exits non-zero" 1 "$tmp/tix" show 1 --project zen
+check "a variant spelling still matches" "fix login bug" "$tmp/tix" show 1 --project ACME
+check "mismatched --project rejects an unknown project" 'unknown project "acmee"' "$tmp/tix" show 1 --project acmee
+check "bump names the project it touched" "ac-1 -> P0 (acme: fix login bug)" "$tmp/tix" bump 1 0 --project acme
+check_status "bump rejects a mismatched --project" 1 "$tmp/tix" bump 1 3 --project zen
+check "bump left the priority alone after rejecting" "ac-1 [P0]" "$tmp/tix" show 1
+check_status "done rejects a mismatched --project" 1 "$tmp/tix" done 1 --project zen
+check_absent "done left the ticket open after rejecting" "x ac-1" "$tmp/tix" list --project acme -a
+
+# edit's --project moves a ticket rather than scoping the lookup, so the move
+# itself has to show up in the confirmation
+movable=$("$tmp/tix" add --project acme "movable ticket" -b body | sed 's/^[a-z0-9]*-\([0-9]*\) .*/\1/')
+check "edit reports a cross-project move" "moved from acme to zen" "$tmp/tix" edit "$movable" --project zen
+check "the moved ticket lists under zen" "movable ticket" "$tmp/tix" list --project zen
+check_absent "edit stays quiet when the project is unchanged" "moved from" "$tmp/tix" edit "$movable" --title "renamed ticket"
+"$tmp/tix" rm "$movable" --project zen >/dev/null
+
+check "rm removes a ticket" "ac-2 removed (acme: write docs)" "$tmp/tix" rm 2 --project acme
+check "done marks a ticket" "ac-1 done (acme: fix login bug)" "$tmp/tix" done 1
 check_absent "list excludes done ticket" "ac-1" "$tmp/tix" list --project acme
 check "list --all shows done ticket" "x ac-1" "$tmp/tix" list --project acme -a
 check "projects counts done tickets" "acme (ac) done=1 total=1" "$tmp/tix" projects

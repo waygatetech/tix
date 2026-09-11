@@ -81,12 +81,12 @@ tix done 1
 - `tix list --project NAME [--all] [--status STATUS] [--priority N] [--limit N] [--json] [--compact] [--fields FIELDS]` — list tickets for a project. Done tickets are hidden unless `--all` is set.
 - `tix next --project NAME [--json] [--compact] [--fields FIELDS]` — show the highest-priority open ticket for a project.
 - `tix claim-next --project NAME [--json] [--compact] [--fields FIELDS]` — mark the highest-priority open ticket `in_progress` and print it.
-- `tix show [id] [--json] [--compact] [--fields FIELDS]` — show full details for one ticket.
+- `tix show [id] [--project NAME] [--json] [--compact] [--fields FIELDS]` — show full details for one ticket. `--project` is optional and asserts which project the ticket belongs to: a mismatch is an error.
 - `tix projects [--json] [--compact] [--fields FIELDS]` — list all projects with ticket counts grouped by status.
 - `tix projects add NAME [--key PREFIX] [--repo-path PATH]` — create a project. `--key` pins its ticket ID prefix; `--repo-path` records where its code lives.
 - `tix projects set-repo-path NAME [PATH]` — record where an existing project's code lives, so commands run there can skip `--project`. `PATH` defaults to the current directory.
-- `tix bump [id] [priority]` — change a ticket's priority.
-- `tix done [id]` — mark a ticket done.
+- `tix bump [id] [priority] [--project NAME]` — change a ticket's priority.
+- `tix done [id] [--project NAME]` — mark a ticket done.
 - `tix rm [id] --project NAME` — remove a ticket from a project.
 - `tix prefix [project] [prefix]` — show ticket ID prefixes, or pin one for a project.
 - `tix web [--port N]` — serve the cross-project dashboard at `http://localhost:8080`.
@@ -132,6 +132,14 @@ fe-47 [P2] fix login redirect
 ```
 
 Any command taking an ID accepts either form — `tix done 47` and `tix done fe-47` both work, so IDs already in shell history and scripts stay valid. The difference is that the prefixed form is checked: if ticket 47 is not a `fe` ticket, the command fails instead of acting on the wrong project's ticket.
+
+Mutations also name the project they touched, so a bare ID still leaves a record of which backlog changed:
+
+```
+ac-1 done (acme: fix login bug)
+```
+
+For the same reason `show`, `bump`, and `done` take an optional `--project`, which asserts the target rather than scoping the lookup: `tix done 47 --project frontend` fails if 47 belongs to another project. `tix edit --project` is the exception — there it sets a *new* project, and the confirmation reports the move as `moved from backend to frontend`.
 
 The ID is an integer everywhere it is consumed by a program. `--json` output and the MCP tools emit `"id": 47`, never the prefixed string, so the prefix is purely a display and input convenience.
 

@@ -29,6 +29,15 @@ var editCmd = &cobra.Command{
 			return err
 		}
 
+		// Read the ticket first so a move can be reported as a move: edit's
+		// --project sets a new project rather than scoping the lookup, so
+		// without the old name the confirmation cannot say where the ticket
+		// came from.
+		before, err := tix.Show(id)
+		if err != nil {
+			return err
+		}
+
 		if editBody != "" && editBodyFile != "" {
 			return errors.New("use either --body or --body-file, not both")
 		}
@@ -72,6 +81,9 @@ var editCmd = &cobra.Command{
 		}
 		fmt.Printf("%s [P%d] %s (%s, %s)\n",
 			tix.FormatID(prefix, ticket.ID), ticket.Priority, ticket.Title, ticket.Status, ticket.Project)
+		if before.Project != ticket.Project {
+			fmt.Printf("moved from %s to %s\n", before.Project, ticket.Project)
+		}
 		if ticket.Body != "" {
 			fmt.Println(ticket.Body)
 		}

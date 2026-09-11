@@ -23,6 +23,13 @@ var rmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		// Read the ticket before it is gone so the confirmation can name what
+		// was removed; Remove still does the project-scoped delete, so a
+		// ticket in another project fails there rather than here.
+		ticket, err := tix.Show(id)
+		if err != nil {
+			return err
+		}
 		if err := tix.Remove(id, project); err != nil {
 			return fmt.Errorf("error removing ticket: %w", err)
 		}
@@ -30,7 +37,7 @@ var rmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s removed\n", tix.FormatID(prefix, id))
+		fmt.Printf("%s removed %s\n", tix.FormatID(prefix, id), ticketContext(ticket))
 		return nil
 	},
 }

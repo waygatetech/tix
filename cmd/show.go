@@ -22,6 +22,9 @@ var showCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if err := requireProjectMatch(ticket, project); err != nil {
+			return err
+		}
 		if jsonOutput {
 			return printJSON(ticket, compactOutput, fieldsOutput)
 		}
@@ -40,6 +43,7 @@ var showCmd = &cobra.Command{
 }
 
 func init() {
+	showCmd.Flags().StringVarP(&project, "project", "p", "", "project the ticket must belong to (errors on mismatch)")
 	showCmd.Flags().BoolVar(&jsonOutput, "json", false, "output ticket as JSON")
 	showCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
 	showCmd.Flags().StringVar(&fieldsOutput, "fields", "", "comma-separated JSON fields to include")

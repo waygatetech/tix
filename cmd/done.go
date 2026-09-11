@@ -25,6 +25,9 @@ var doneCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if err := requireProjectMatch(ticket, project); err != nil {
+			return err
+		}
 		if err := tix.Done(id); err != nil {
 			return fmt.Errorf("done failed: %w", err)
 		}
@@ -32,11 +35,12 @@ var doneCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s done\n", tix.FormatID(prefix, id))
+		fmt.Printf("%s done %s\n", tix.FormatID(prefix, id), ticketContext(ticket))
 		return nil
 	},
 }
 
 func init() {
+	doneCmd.Flags().StringVarP(&project, "project", "p", "", "project the ticket must belong to (errors on mismatch)")
 	rootCmd.AddCommand(doneCmd)
 }
