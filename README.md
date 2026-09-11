@@ -183,4 +183,6 @@ git push origin v0.1.0
 
 ## License
 
-`tix` is licensed under the [MIT License](LICENSE).
+`tix` is created and maintained by Waygate Technologies, LLC.
+
+Copyright © 2026 Waygate Technologies, LLC. Licensed under the [MIT License](LICENSE).
