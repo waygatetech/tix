@@ -13,8 +13,14 @@ var mcpCmd = &cobra.Command{
 
 The server speaks the Model Context Protocol on stdin/stdout, so MCP clients
 like Claude Desktop can call tix operations as tools. It reads and writes the
-same database the CLI uses (~/.tix/tix.db by default, or TIX_DB if set).`,
-	PersistentPreRunE: initDB,
+same database the CLI uses (~/.tix/tix.db by default, or TIX_DB if set). A
+repo's .tix/config.json is ignored here: point the server at a specific
+database with TIX_DB in its environment.`,
+	// The server's working directory is wherever the client happened to launch
+	// it, which is not reliably the repo the calling agent means — the same
+	// reason its tools require an explicit project. So it takes TIX_DB or the
+	// global database and never picks one off the filesystem.
+	PersistentPreRunE: initDBWithoutRepoLookup,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// The root's version is what main stamped, so serverInfo reports the
 		// build the client is actually talking to.

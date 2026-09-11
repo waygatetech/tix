@@ -13,7 +13,8 @@
 ## Code Notes
 
 - Keep user-facing CLI behavior in `cmd/` and reusable ticket/database behavior in `internal/tix/`.
-- The default database path is `~/.tix/tix.db`; set `TIX_DB` in tests or automation to avoid the real user database.
+- The database is resolved in `internal/tix/db.go`: `TIX_DB`, then the database a repo opts into with `.tix/config.json`, then `~/.tix/tix.db`. Set `TIX_DB` in tests or automation to avoid the real user database.
+- Repo-local resolution is CLI-only; `tix mcp` takes `TIX_DB` or the global database, because an MCP server's working directory is not reliably the caller's repo.
 - The `internal/tix` package uses a package-level `db`; tests should reset or close it between cases.
 - Import `modernc.org/sqlite` for its side effect wherever a standalone binary or test package needs to open SQLite connections.
 - Preserve project scoping for commands that accept `--project`.

@@ -188,6 +188,35 @@ else
 fi
 popd >/dev/null
 
+# a repo that checks in .tix/config.json keeps its tickets to itself, with no
+# TIX_DB in the environment — HOME moves too, so a wrong answer lands in a
+# throwaway global database instead of the real ~/.tix one
+repo_home="$tmp/repo-home"
+mkdir -p "$repo_home" "$tmp/own-backlog/.tix" "$tmp/own-backlog/cmd"
+printf '{"db": "tix.db"}\n' > "$tmp/own-backlog/.tix/config.json"
+solo() { env -u TIX_DB HOME="$repo_home" "$tmp/tix" "$@"; }
+pushd "$tmp/own-backlog/cmd" >/dev/null
+check "repo config creates the project in the repo's own database" "created project own" solo projects add own
+check "repo config files the ticket in the repo's own database" "own ticket" solo add --project own "own ticket" -b "lives in the repo"
+check "repo config is found from a subdirectory" "own ticket" solo list --project own
+popd >/dev/null
+if [[ -f "$tmp/own-backlog/.tix/tix.db" && ! -e "$repo_home/.tix" ]]; then
+  echo "ok: the repo's tickets never reach the global database"
+  pass=$((pass + 1))
+else
+  echo "FAIL: the repo's tickets never reach the global database" >&2
+  exit 1
+fi
+
+# the shape a hosted backend would arrive in: a config this tix cannot honor is
+# an error, not a quiet fall back to the global backlog
+mkdir -p "$tmp/hosted/.tix"
+printf '{"remote": "https://tix.example.com/acme"}\n' > "$tmp/hosted/.tix/config.json"
+pushd "$tmp/hosted" >/dev/null
+check "a repo config naming no database fails loudly" 'sets no "db"' solo projects
+check_status "a repo config naming no database exits non-zero" 1 solo projects
+popd >/dev/null
+
 check "next returns highest priority first" "write docs" "$tmp/tix" next --project acme
 check "next supports JSON output" '"id": 2' "$tmp/tix" next --project acme --json
 check "next supports compact JSON output" '{"id":2,' "$tmp/tix" next --project acme --json --compact

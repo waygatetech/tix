@@ -196,13 +196,35 @@ Reach for `--json` when a program parses the output. For reading — including b
 
 ### Using a custom database path
 
-Set `TIX_DB` to point `tix` at a specific SQLite file instead of the default `~/.tix/tix.db`:
+`tix` picks its database in this order:
+
+1. `TIX_DB`, if set.
+2. The database the current repo opts into, if any (see below).
+3. `~/.tix/tix.db`, the global backlog every project shares by default.
+
+Set `TIX_DB` to point `tix` at a specific SQLite file for one command or one shell:
 
 ```sh
-TIX_DB=.tix/tix.db tix list --project acme
+TIX_DB=/tmp/scratch.db tix list --project acme
 ```
 
-This is useful for keeping a project-local ticket database checked into a repo, or for isolating test runs.
+This is useful for isolating test runs, or for reaching a database that is not the one the working directory implies.
+
+### Giving a repo its own backlog
+
+A repo that should not share the global backlog — a team repo where the tickets are checked in alongside the code, say — says so in `.tix/config.json`:
+
+```json
+{
+  "db": "tix.db"
+}
+```
+
+Every `tix` command run anywhere inside that repo then reads and writes `.tix/tix.db`, with nothing to export. A relative `db` is relative to the config file, so `"tix.db"` means the database beside it; an absolute path is taken as written. The nearest config wins, so a checkout sitting inside another repo keeps its own tickets.
+
+A repo that already keeps its database at `.tix/tix.db` needs no config at all — `tix` finds it. If you want to keep one repo on the global backlog while a parent directory opts out, run it with `TIX_DB=~/.tix/tix.db`.
+
+Solo work needs none of this: without a config, everything stays in `~/.tix/tix.db` and is scoped by project.
 
 ## Using tix with AI coding agents
 

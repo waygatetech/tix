@@ -12,6 +12,199 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// writeRepoConfig gives dir a .tix/config.json holding body, which is how a
+// repo says its tickets do not belong in the global database.
+func writeRepoConfig(t *testing.T, dir, body string) string {
+	t.Helper()
+
+	tixDir := filepath.Join(dir, tixDirName)
+	if err := os.MkdirAll(tixDir, 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", tixDir, err)
+	}
+	path := filepath.Join(tixDir, configFileName)
+	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return path
+}
+
+// noRepoDB keeps a test that resolves the database from leaking its answer
+// into the next one, since the resolved path is package state.
+func noRepoDB(t *testing.T) {
+	t.Helper()
+
+	t.Setenv("TIX_DB", "")
+	repoDB = ""
+	t.Cleanup(func() { repoDB = "" })
+}
+
+// A repo names its database in .tix/config.json, relative to the config that
+// names it, so the whole opt-in is one checked-in file.
+func TestDiscoverRepoDBReadsTheRepoConfig(t *testing.T) {
+	noRepoDB(t)
+
+	repo := t.TempDir()
+	writeRepoConfig(t, repo, `{"db": "tix.db"}`)
+
+	got, err := discoverRepoDB(repo)
+	if err != nil {
+		t.Fatalf("discoverRepoDB: %v", err)
+	}
+	want := filepath.Join(repo, tixDirName, dbFileName)
+	if got != want {
+		t.Errorf("discoverRepoDB() = %q, want %q", got, want)
+	}
+}
+
+// Commands run from wherever the work is, so the config has to be found from a
+// subdirectory the same way git finds its own.
+func TestDiscoverRepoDBFindsTheConfigFromASubdirectory(t *testing.T) {
+	noRepoDB(t)
+
+	repo := t.TempDir()
+	writeRepoConfig(t, repo, `{"db": "../backlog.db"}`)
+	nested := filepath.Join(repo, "internal", "tix")
+	if err := os.MkdirAll(nested, 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", nested, err)
+	}
+
+	got, err := discoverRepoDB(nested)
+	if err != nil {
+		t.Fatalf("discoverRepoDB: %v", err)
+	}
+	want := filepath.Join(repo, "backlog.db")
+	if got != want {
+		t.Errorf("discoverRepoDB() = %q, want %q", got, want)
+	}
+}
+
+// A checkout inside another repo gets its own backlog rather than the outer
+// repo's, which is what makes the nearest config the one that counts.
+func TestDiscoverRepoDBPrefersTheNearestConfig(t *testing.T) {
+	noRepoDB(t)
+
+	outer := t.TempDir()
+	writeRepoConfig(t, outer, `{"db": "outer.db"}`)
+	inner := filepath.Join(outer, "vendor", "inner")
+	if err := os.MkdirAll(inner, 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", inner, err)
+	}
+	writeRepoConfig(t, inner, `{"db": "inner.db"}`)
+
+	got, err := discoverRepoDB(inner)
+	if err != nil {
+		t.Fatalf("discoverRepoDB: %v", err)
+	}
+	want := filepath.Join(inner, tixDirName, "inner.db")
+	if got != want {
+		t.Errorf("discoverRepoDB() = %q, want %q", got, want)
+	}
+}
+
+// An absolute path is taken as written, so a repo can point at a database that
+// lives outside the checkout.
+func TestDiscoverRepoDBAcceptsAnAbsolutePath(t *testing.T) {
+	noRepoDB(t)
+
+	repo := t.TempDir()
+	elsewhere := filepath.Join(t.TempDir(), "shared.db")
+	writeRepoConfig(t, repo, fmt.Sprintf(`{"db": %q}`, elsewhere))
+
+	got, err := discoverRepoDB(repo)
+	if err != nil {
+		t.Fatalf("discoverRepoDB: %v", err)
+	}
+	if got != elsewhere {
+		t.Errorf("discoverRepoDB() = %q, want %q", got, elsewhere)
+	}
+}
+
+// Repos that already keep their database at .tix/tix.db by exporting TIX_DB
+// get the same result with nothing exported and no config to write.
+func TestDiscoverRepoDBFindsADatabaseWithoutAConfig(t *testing.T) {
+	noRepoDB(t)
+
+	repo := t.TempDir()
+	local := filepath.Join(repo, tixDirName, dbFileName)
+	if err := os.MkdirAll(filepath.Dir(local), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(local, nil, 0644); err != nil {
+		t.Fatalf("write %s: %v", local, err)
+	}
+
+	got, err := discoverRepoDB(filepath.Join(repo))
+	if err != nil {
+		t.Fatalf("discoverRepoDB: %v", err)
+	}
+	if got != local {
+		t.Errorf("discoverRepoDB() = %q, want %q", got, local)
+	}
+}
+
+// A config naming a database this tix cannot open — the shape a hosted backend
+// would arrive in — has to fail rather than quietly file tickets into the
+// global backlog.
+func TestDiscoverRepoDBRejectsAConfigThatNamesNoDatabase(t *testing.T) {
+	noRepoDB(t)
+
+	repo := t.TempDir()
+	writeRepoConfig(t, repo, `{"remote": "https://tix.example.com/acme"}`)
+
+	if _, err := discoverRepoDB(repo); err == nil {
+		t.Fatal("discoverRepoDB() = nil error, want one for a config with no db")
+	} else if !strings.Contains(err.Error(), `sets no "db"`) {
+		t.Errorf("discoverRepoDB() error = %q, want it to name the missing db", err)
+	}
+}
+
+func TestDiscoverRepoDBRejectsAMalformedConfig(t *testing.T) {
+	noRepoDB(t)
+
+	repo := t.TempDir()
+	writeRepoConfig(t, repo, `{"db": `)
+
+	if _, err := discoverRepoDB(repo); err == nil {
+		t.Fatal("discoverRepoDB() = nil error, want one for unparseable JSON")
+	}
+}
+
+// The solo case: a directory that opts into nothing keeps the global backlog,
+// so nothing about ~/.tix/tix.db changes for anyone who never writes a config.
+func TestUseRepoDBLeavesTheGlobalDatabaseAlone(t *testing.T) {
+	noRepoDB(t)
+
+	if err := UseRepoDB(t.TempDir()); err != nil {
+		t.Fatalf("UseRepoDB: %v", err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home directory: %v", err)
+	}
+	want := filepath.Join(home, tixDirName, dbFileName)
+	if got := dbPath(); got != want {
+		t.Errorf("dbPath() = %q, want %q", got, want)
+	}
+}
+
+// TIX_DB is the caller speaking for this one command, so it outranks a config
+// checked in by someone else.
+func TestUseRepoDBDefersToTIXDB(t *testing.T) {
+	noRepoDB(t)
+
+	repo := t.TempDir()
+	writeRepoConfig(t, repo, `{"db": "tix.db"}`)
+	t.Setenv("TIX_DB", "/tmp/custom-tix.db")
+
+	if err := UseRepoDB(repo); err != nil {
+		t.Fatalf("UseRepoDB: %v", err)
+	}
+	if got := dbPath(); got != "/tmp/custom-tix.db" {
+		t.Errorf("dbPath() = %q, want the TIX_DB path", got)
+	}
+}
+
 // An unusable database path is an error for the caller to report, not a reason
 // to exit the process: commands that never open the database still have to run.
 func TestInitDBReportsAnUnusableDatabasePath(t *testing.T) {

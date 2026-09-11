@@ -83,7 +83,7 @@ Install `tix` (see the [main README](../README.md#install)), then point Claude D
 
 Use an absolute path — Claude Desktop does not inherit your shell's `PATH`. `which tix` prints it.
 
-To point it at a specific database instead of the default `~/.tix/tix.db`, set `TIX_DB` in the server's environment:
+Unlike the CLI, the server does not look for a repo's `.tix/config.json`: its working directory is wherever the client launched it, which is not reliably the repo the calling agent means — the same reason its tools require an explicit `project`. To point it at a specific database instead of the default `~/.tix/tix.db`, set `TIX_DB` in the server's environment:
 
 ```json
 {

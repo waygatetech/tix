@@ -2,19 +2,131 @@ package tix
 
 import (
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 var db *sql.DB
 
+const (
+	// tixDirName holds whatever a repo says about its own tickets: a config
+	// file naming the database, or the database itself.
+	tixDirName = ".tix"
+	// configFileName is the per-repo config, checked in alongside the code.
+	configFileName = "config.json"
+	// dbFileName is the database's name in both ~/.tix and a repo's .tix.
+	dbFileName = "tix.db"
+)
+
+// repoDB is the database the working directory's repo opted into, empty when
+// it did not. UseRepoDB sets it; everything else keeps the global database.
+var repoDB string
+
+// dbPath answers which database commands read and write. TIX_DB is the most
+// explicit thing a caller can say, so it outranks a config file the caller may
+// not have written; a repo that opted into its own database comes next; and
+// everything else — the solo case — shares one backlog in ~/.tix.
 func dbPath() string {
 	if path := os.Getenv("TIX_DB"); path != "" {
 		return path
 	}
+	if repoDB != "" {
+		return repoDB
+	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".tix", "tix.db")
+	return filepath.Join(home, tixDirName, dbFileName)
+}
+
+// repoConfig is the shape of .tix/config.json: what a repo says about where
+// its tickets live. Only a local database path is understood today, so a
+// future hosted backend adds a key here rather than changing how any caller
+// asks for the database.
+type repoConfig struct {
+	DB string `json:"db"`
+}
+
+// UseRepoDB points the database at the one dir or one of its parents opts
+// into, and leaves the global database in place when nothing does. Solo work
+// keeps every project in ~/.tix/tix.db; a repo that wants its tickets to
+// itself checks in .tix/config.json, or simply keeps its database at
+// .tix/tix.db.
+func UseRepoDB(dir string) error {
+	// dbPath prefers the environment regardless, so an explicit TIX_DB makes
+	// the walk pointless rather than merely overridden.
+	if os.Getenv("TIX_DB") != "" {
+		return nil
+	}
+	path, err := discoverRepoDB(dir)
+	if err != nil {
+		return err
+	}
+	repoDB = path
+	return nil
+}
+
+// discoverRepoDB walks dir and its parents for the nearest repo-local
+// database, and reports "" when no directory on the way to the root opts into
+// one. The nearest wins, so a checkout sitting inside another repo gets its
+// own backlog instead of the outer repo's.
+func discoverRepoDB(dir string) (string, error) {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	for {
+		configPath := filepath.Join(dir, tixDirName, configFileName)
+		data, err := os.ReadFile(configPath)
+		switch {
+		case err == nil:
+			return configuredDB(configPath, data)
+		case !errors.Is(err, fs.ErrNotExist):
+			return "", fmt.Errorf("read %s: %w", configPath, err)
+		}
+
+		// A repo with no config still opts in by keeping its database where
+		// the docs put it, which is what `TIX_DB=.tix/tix.db tix` had every
+		// such repo doing by hand.
+		local := filepath.Join(dir, tixDirName, dbFileName)
+		if info, err := os.Stat(local); err == nil && !info.IsDir() {
+			return local, nil
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", nil
+		}
+		dir = parent
+	}
+}
+
+// configuredDB reads the database out of a .tix/config.json. A relative path
+// is relative to the file naming it, so `"db": "tix.db"` means the database
+// beside the config.
+//
+// A config that names no database is an error rather than a quiet fall back to
+// the global one: that is what an older tix sees when it meets a config for a
+// backend it does not understand, and writing tickets into the wrong backlog
+// is worse than refusing.
+func configuredDB(configPath string, data []byte) (string, error) {
+	var cfg repoConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return "", fmt.Errorf("parse %s: %w", configPath, err)
+	}
+	if strings.TrimSpace(cfg.DB) == "" {
+		return "", fmt.Errorf(
+			`%s sets no "db"; this tix understands only a local database path`,
+			configPath,
+		)
+	}
+	if filepath.IsAbs(cfg.DB) {
+		return cfg.DB, nil
+	}
+	return filepath.Join(filepath.Dir(configPath), cfg.DB), nil
 }
 
 // DBPath is the database file commands read and write, so a caller can tell a
