@@ -15,7 +15,9 @@ var rootCmd = &cobra.Command{
 }
 
 // Execute opens the database and runs the command named on the command line.
-func Execute() {
+// The version comes from main so release builds can stamp it via ldflags.
+func Execute(version string) {
+	rootCmd.Version = version
 	tix.InitDB()
 	err := rootCmd.Execute()
 	if err != nil {

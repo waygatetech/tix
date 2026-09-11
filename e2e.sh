@@ -64,6 +64,9 @@ check_status() {
   fi
 }
 
+# releases stamp main.version through ldflags; an unstamped build says "dev"
+check "--version reports the build" "tix version dev" "$tmp/tix" --version
+
 # projects are rows: a name has to be created before tickets can land in it,
 # either up front or with --create on the first ticket
 check "add --create defines project acme" "created project acme" "$tmp/tix" add --project acme "fix login bug" -b "users can't log in" --create
