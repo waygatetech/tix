@@ -60,6 +60,48 @@ func TestInitDBRecordsSchemaVersion(t *testing.T) {
 	}
 }
 
+// claim-next and next are the queries that run on every agent turn, so they
+// have to reach their row through the index rather than scanning the shared
+// database. A plan naming the index proves both the seek and the ordering: the
+// index carries priority and order_rank, so SQLite reads the rows already
+// sorted and never falls back to a temporary b-tree.
+func TestClaimNextQueryUsesTheCoveringIndex(t *testing.T) {
+	setupTestDB(t)
+
+	rows, err := db.Query(
+		`EXPLAIN QUERY PLAN
+		 SELECT id FROM tickets
+		 WHERE status = 'open' AND project = ?
+		 ORDER BY priority ASC, order_rank ASC LIMIT 1`,
+		"acme",
+	)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	defer rows.Close()
+
+	var plan []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan plan row: %v", err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read plan: %v", err)
+	}
+
+	joined := strings.Join(plan, "; ")
+	if !strings.Contains(joined, "tickets_project_status_order") {
+		t.Errorf("query plan does not use the index: %s", joined)
+	}
+	if strings.Contains(joined, "TEMP B-TREE") {
+		t.Errorf("query plan sorts instead of reading the index in order: %s", joined)
+	}
+}
+
 // A database created before migrations existed reports version 0 but already
 // has the tickets table and its rows. Migrating it must bring the version
 // forward without disturbing what is there.

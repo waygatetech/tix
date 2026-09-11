@@ -111,6 +111,14 @@ var migrations = []string{
 	`ALTER TABLE tickets ADD COLUMN updated_at DATETIME;
 	UPDATE tickets SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL;
 	UPDATE tickets SET updated_at = created_at WHERE updated_at IS NULL;`,
+	// Every ticket lookup starts by narrowing to one project, and next and
+	// claim-next add status = 'open' before ordering by priority and
+	// order_rank. Leading with those two equality columns lets SQLite seek
+	// straight to the matching rows and read them already sorted, so the hot
+	// path stops scanning the whole table as the shared database accumulates
+	// history from every repo.
+	`CREATE INDEX IF NOT EXISTS tickets_project_status_order
+		ON tickets(project, status, priority, order_rank);`,
 }
 
 // migrate applies every migration the database has not seen yet. The version
