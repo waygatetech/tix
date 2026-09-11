@@ -65,6 +65,23 @@ var migrations = []string{
 		project TEXT PRIMARY KEY,
 		prefix TEXT NOT NULL UNIQUE
 	);`,
+	// Projects become rows so an unknown --project is an error instead of a
+	// silent new project. Every name already used by a ticket or a pinned
+	// prefix is backfilled, so an existing database keeps working untouched.
+	// project_prefixes folds into projects.key, which leaves one place that
+	// says what a project is called and what its tickets are prefixed with.
+	`CREATE TABLE IF NOT EXISTS projects (
+		name TEXT PRIMARY KEY,
+		key TEXT NOT NULL DEFAULT '',
+		repo_path TEXT NOT NULL DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	INSERT OR IGNORE INTO projects (name) SELECT DISTINCT project FROM tickets WHERE project != '';
+	INSERT OR IGNORE INTO projects (name) SELECT project FROM project_prefixes WHERE project != '';
+	UPDATE projects SET key = COALESCE(
+		(SELECT prefix FROM project_prefixes WHERE project_prefixes.project = projects.name), '');
+	DROP TABLE project_prefixes;
+	CREATE UNIQUE INDEX IF NOT EXISTS projects_key_unique ON projects(key) WHERE key != '';`,
 }
 
 // migrate applies every migration the database has not seen yet. The version

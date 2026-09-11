@@ -43,11 +43,17 @@ go build .
 
 ## Quick start
 
-Projects are created implicitly — just pass a `--project` name and `tix` handles the rest.
+Projects are created explicitly, so a mistyped `--project` fails instead of quietly starting a new project that hides your tickets.
 
 ```sh
-# add a ticket
-tix add --project acme "fix login bug" --body "users cannot log in"
+# create a project along with its first ticket
+tix add --project acme "fix login bug" --body "users cannot log in" --create
+
+# or create it up front
+tix projects add acme
+
+# add a ticket to a project that exists
+tix add --project acme "fix search" --body "timeouts over 30s"
 
 # add a ticket with a longer body from a file
 tix add --project acme "investigate search timeout" --body-file ./notes.md
@@ -67,12 +73,13 @@ tix done 1
 
 ## Commands
 
-- `tix add [title] --project NAME (--body TEXT | --body-file PATH) [--priority N]` — add a ticket. Priority defaults to `2`; lower numbers are higher priority (`P0` is most urgent).
+- `tix add [title] --project NAME (--body TEXT | --body-file PATH) [--priority N] [--create]` — add a ticket. Priority defaults to `2`; lower numbers are higher priority (`P0` is most urgent). `--create` makes the project when it does not exist yet.
 - `tix list --project NAME [--all] [--status STATUS] [--priority N] [--limit N] [--json] [--compact] [--fields FIELDS]` — list tickets for a project. Done tickets are hidden unless `--all` is set.
 - `tix next --project NAME [--json] [--compact] [--fields FIELDS]` — show the highest-priority open ticket for a project.
 - `tix claim-next --project NAME [--json] [--compact] [--fields FIELDS]` — mark the highest-priority open ticket `in_progress` and print it.
 - `tix show [id] [--json] [--compact] [--fields FIELDS]` — show full details for one ticket.
 - `tix projects [--json] [--compact] [--fields FIELDS]` — list all projects with ticket counts grouped by status.
+- `tix projects add NAME [--key PREFIX] [--repo-path PATH]` — create a project. `--key` pins its ticket ID prefix; `--repo-path` records where its code lives.
 - `tix bump [id] [priority]` — change a ticket's priority.
 - `tix done [id]` — mark a ticket done.
 - `tix rm [id] --project NAME` — remove a ticket from a project.
@@ -82,6 +89,19 @@ tix done 1
 - `tix init-agent PROJECT [--db PATH]` — append idempotent `tix` workflow guidance to `AGENTS.md` and `CLAUDE.md` at the current Git repository root (or the current directory), so coding agents know how to use `tix` in this repo.
 
 Priorities sort ascending, so `P0` appears before `P2`. Tickets with the same priority keep insertion order.
+
+### Projects
+
+A project is a row, not whatever string you happened to type. Every command that takes `--project` resolves the name against the projects that exist, and an unknown one is an error listing the names that are real:
+
+```
+$ tix list --project frontned
+unknown project "frontned": known projects are acme, frontend, zen; pass --create (or create=true) to make it a new one
+```
+
+Matching ignores case and punctuation, so `frontend`, `Frontend`, `front-end` and `FRONT END` all reach the one project named `frontend` rather than starting three more. Creating a project whose name only varies that way is refused for the same reason.
+
+This matters most for tools with no shell history to autocomplete from: an agent inventing a spelling gets an error naming the real projects instead of a private backlog nobody else can see.
 
 ### Ticket IDs
 

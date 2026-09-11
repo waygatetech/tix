@@ -16,6 +16,7 @@ var project string
 var priority int
 var body string
 var bodyFile string
+var createProject bool
 
 // addCmd represents the add command
 var addCmd = &cobra.Command{
@@ -50,6 +51,17 @@ var addCmd = &cobra.Command{
 			title += " " + a
 		}
 
+		if createProject {
+			resolved, created, err := tix.EnsureProject(project)
+			if err != nil {
+				return err
+			}
+			if created {
+				fmt.Printf("created project %s\n", resolved)
+			}
+			project = resolved
+		}
+
 		id, err := tix.Add(title, body, priority, project)
 		if err != nil {
 			return fmt.Errorf("add failed: %w", err)
@@ -66,6 +78,7 @@ var addCmd = &cobra.Command{
 func init() {
 	addCmd.Flags().StringVar(&project, "project", "", "project name")
 	_ = addCmd.MarkFlagRequired("project")
+	addCmd.Flags().BoolVar(&createProject, "create", false, "create the project if it does not exist yet")
 	addCmd.Flags().StringVarP(&body, "body", "b", "", "ticket body")
 	addCmd.Flags().StringVar(&bodyFile, "body-file", "", "read ticket body from file")
 	addCmd.Flags().IntVarP(&priority, "priority", "p", 2, "ticket priority")

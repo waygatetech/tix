@@ -114,6 +114,7 @@ func TestParseRefAcceptsBothForms(t *testing.T) {
 
 func TestResolveRefRejectsWrongProjectPrefix(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme")
 
 	acmeID, err := Add("fix login bug", "", 2, "acme")
 	if err != nil {
@@ -145,6 +146,7 @@ func TestResolveRefRejectsWrongProjectPrefix(t *testing.T) {
 
 func TestSetPrefixOverridesAndRejectsDuplicates(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme", "zen")
 
 	if _, err := Add("fix login bug", "", 2, "acme"); err != nil {
 		t.Fatalf("Add acme ticket: %v", err)

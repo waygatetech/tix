@@ -16,7 +16,11 @@ type Ticket struct {
 }
 
 type ProjectSummary struct {
-	Project      string         `json:"project"`
+	Project string `json:"project"`
+	// Key is the prefix the project's ticket IDs display with, derived from the
+	// name unless it was pinned.
+	Key          string         `json:"key"`
+	RepoPath     string         `json:"repo_path,omitempty"`
 	StatusCounts map[string]int `json:"status_counts"`
 	Total        int            `json:"total"`
 }
@@ -30,6 +34,10 @@ type ListOptions struct {
 }
 
 func Add(title, body string, priority int, project string) (int64, error) {
+	project, err := ResolveProject(project)
+	if err != nil {
+		return 0, err
+	}
 
 	var maxRank int
 	db.QueryRow(`SELECT COALESCE(MAX(order_rank), 0) FROM tickets`).Scan(&maxRank)
@@ -97,8 +105,13 @@ func List(project string, showAll bool) []string {
 }
 
 func ListTickets(options ListOptions) ([]Ticket, error) {
+	project, err := ResolveProject(options.Project)
+	if err != nil {
+		return nil, err
+	}
+
 	where := []string{`project = ?`}
-	args := []any{options.Project}
+	args := []any{project}
 	if options.Status != "" {
 		where = append(where, `status = ?`)
 		args = append(args, options.Status)
@@ -144,8 +157,13 @@ func Next(project string) (int, string, string, int, error) {
 }
 
 func NextTicket(project string) (Ticket, error) {
+	project, err := ResolveProject(project)
+	if err != nil {
+		return Ticket{}, err
+	}
+
 	var ticket Ticket
-	err := db.QueryRow(
+	err = db.QueryRow(
 		`SELECT id, title, body, status, priority, project FROM tickets
 			 WHERE status = 'open'
 			 AND project = ?
@@ -159,6 +177,11 @@ func NextTicket(project string) (Ticket, error) {
 }
 
 func ClaimNext(project string) (Ticket, error) {
+	project, err := ResolveProject(project)
+	if err != nil {
+		return Ticket{}, err
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		return Ticket{}, err
@@ -234,15 +257,36 @@ func AllTickets() ([]Ticket, error) {
 	return tickets, nil
 }
 
+// Projects summarizes every project in the table, including one whose tickets
+// are all gone or that was created before its first ticket.
 func Projects() ([]ProjectSummary, error) {
+	known, err := ListProjects()
+	if err != nil {
+		return nil, err
+	}
+	prefixes, err := Prefixes()
+	if err != nil {
+		return nil, err
+	}
+
+	projects := make([]ProjectSummary, 0, len(known))
+	indexes := map[string]int{}
+	for _, project := range known {
+		indexes[project.Name] = len(projects)
+		projects = append(projects, ProjectSummary{
+			Project:      project.Name,
+			Key:          prefixes[project.Name],
+			RepoPath:     project.RepoPath,
+			StatusCounts: map[string]int{},
+		})
+	}
+
 	rows, err := db.Query(`SELECT project, status, COUNT(*) FROM tickets GROUP BY project, status ORDER BY project ASC, status ASC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	projects := []ProjectSummary{}
-	indexes := map[string]int{}
 	for rows.Next() {
 		var project, status string
 		var count int
@@ -251,10 +295,13 @@ func Projects() ([]ProjectSummary, error) {
 		}
 		index, ok := indexes[project]
 		if !ok {
+			// Tickets whose project predates the table and could not be
+			// backfilled (an empty name) still have to be counted somewhere.
 			index = len(projects)
 			indexes[project] = index
 			projects = append(projects, ProjectSummary{
 				Project:      project,
+				Key:          prefixes[project],
 				StatusCounts: map[string]int{},
 			})
 		}
@@ -296,8 +343,14 @@ func Edit(id int, options EditOptions) (Ticket, error) {
 		args = append(args, *options.Priority)
 	}
 	if options.Project != nil {
+		// Moving a ticket to a project nobody created would hide it just as
+		// thoroughly as adding it there in the first place.
+		project, err := ResolveProject(*options.Project)
+		if err != nil {
+			return Ticket{}, err
+		}
 		sets = append(sets, `project = ?`)
-		args = append(args, *options.Project)
+		args = append(args, project)
 	}
 	if len(sets) == 0 {
 		return Ticket{}, errors.New("no fields to update")
@@ -318,6 +371,10 @@ func Edit(id int, options EditOptions) (Ticket, error) {
 }
 
 func Remove(id int, project string) error {
+	project, err := ResolveProject(project)
+	if err != nil {
+		return err
+	}
 	res, err := db.Exec(`DELETE FROM tickets WHERE id = ? AND project = ?`, id, project)
 	if err != nil {
 		return errors.New("delete failed")

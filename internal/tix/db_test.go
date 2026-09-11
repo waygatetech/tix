@@ -47,6 +47,7 @@ func TestInitDBRecordsSchemaVersion(t *testing.T) {
 // forward without disturbing what is there.
 func TestMigrateUpgradesPreMigrationDatabase(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme")
 
 	if _, err := Add("existing ticket", "", 2, "acme"); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -121,6 +122,7 @@ func TestApplyMigrationLeavesVersionUnchangedOnFailure(t *testing.T) {
 // invocation used to cause.
 func TestInitDBReadsWhileAnotherConnectionWrites(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme")
 
 	if _, err := Add("existing ticket", "", 2, "acme"); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -154,6 +156,7 @@ func TestInitDBReadsWhileAnotherConnectionWrites(t *testing.T) {
 
 func TestClaimNextConcurrentlyClaimsEachTicketOnce(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme")
 
 	const total = 8
 	for i := 0; i < total; i++ {

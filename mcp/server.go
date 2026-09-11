@@ -14,9 +14,15 @@ func NewServer() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "tix", Version: "0.1.0"}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "tix_add",
-		Description: "Create a new ticket in a project.",
+		Name: "tix_add",
+		Description: "Create a new ticket in a project. The project must already exist; " +
+			"call tix_projects to see the names, or pass create=true to make a new one.",
 	}, addTool)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "tix_project_add",
+		Description: "Create a new project.",
+	}, projectAddTool)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tix_list",
@@ -90,7 +96,8 @@ type addArgs struct {
 	Title    string `json:"title" jsonschema:"the ticket title"`
 	Body     string `json:"body" jsonschema:"the ticket body/description"`
 	Priority *int   `json:"priority,omitempty" jsonschema:"priority 0-5, lower is more urgent (default 2)"`
-	Project  string `json:"project" jsonschema:"the project the ticket belongs to"`
+	Project  string `json:"project" jsonschema:"the project the ticket belongs to; must be an existing project unless create is true"`
+	Create   bool   `json:"create,omitempty" jsonschema:"create the project if it does not exist yet"`
 }
 
 type addOut struct {
@@ -117,11 +124,44 @@ func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.Call
 	if priority < 0 || priority > 5 {
 		priority = 2
 	}
-	id, err := tix.Add(args.Title, args.Body, priority, args.Project)
+	// Resolving here rather than leaning on tix.Add means the reply names the
+	// project the ticket actually landed in, so a caller that guessed at the
+	// spelling learns the real one.
+	var (
+		project string
+		err     error
+	)
+	if args.Create {
+		project, _, err = tix.EnsureProject(args.Project)
+	} else {
+		project, err = tix.ResolveProject(args.Project)
+	}
+	if err != nil {
+		return nil, addOut{}, err
+	}
+	id, err := tix.Add(args.Title, args.Body, priority, project)
 	if err != nil {
 		return nil, addOut{}, fmt.Errorf("add failed: %w", err)
 	}
-	return nil, addOut{ID: id, Title: args.Title, Priority: priority, Project: args.Project}, nil
+	return nil, addOut{ID: id, Title: args.Title, Priority: priority, Project: project}, nil
+}
+
+type projectAddArgs struct {
+	Name     string `json:"name" jsonschema:"the project name"`
+	Key      string `json:"key,omitempty" jsonschema:"pin the ticket ID prefix instead of deriving it from the name"`
+	RepoPath string `json:"repo_path,omitempty" jsonschema:"path to the project's repository"`
+}
+
+func projectAddTool(_ context.Context, _ *mcp.CallToolRequest, args projectAddArgs) (*mcp.CallToolResult, tix.Project, error) {
+	project, err := tix.CreateProject(tix.Project{
+		Name:     args.Name,
+		Key:      args.Key,
+		RepoPath: args.RepoPath,
+	})
+	if err != nil {
+		return nil, tix.Project{}, err
+	}
+	return nil, project, nil
 }
 
 type listArgs struct {

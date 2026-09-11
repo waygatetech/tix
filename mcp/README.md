@@ -10,7 +10,7 @@ It calls the same `internal/tix` library functions the CLI uses, and talks to th
 
 | Tool             | Description                                                        |
 | ---------------- | ------------------------------------------------------------------- |
-| `tix_add`        | Create a new ticket in a project.                                  |
+| `tix_add`        | Create a new ticket in an existing project (`create: true` makes a new one). |
 | `tix_list`       | List tickets in a project, optionally filtered by status/priority. |
 | `tix_show`       | Show a single ticket by id.                                        |
 | `tix_edit`       | Edit fields of an existing ticket.                                 |
@@ -20,6 +20,9 @@ It calls the same `internal/tix` library functions the CLI uses, and talks to th
 | `tix_next`       | Show the next open ticket to work on in a project.                 |
 | `tix_claim_next` | Atomically claim the next open ticket in a project.                |
 | `tix_projects`   | List all projects with ticket counts per status.                   |
+| `tix_project_add`| Create a new project.                                              |
+
+The `project` argument of every tool is resolved against the projects that exist, ignoring case and punctuation: `Front-End` reaches the project named `frontend`, and a name that matches nothing is an error listing the real project names. That is what keeps an invented spelling from becoming a fifth project whose tickets nobody else sees.
 
 Each tool returns compact JSON (both as structured content and as its text representation) rather than the CLI's human-formatted, colorized output.
 

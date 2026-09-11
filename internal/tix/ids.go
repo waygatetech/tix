@@ -31,16 +31,11 @@ const fallbackPrefix = "tx"
 // prefixBase reduces a project name to the lowercase alphanumerics a prefix is
 // drawn from, so "Front-End!" and "frontend" yield the same base.
 func prefixBase(project string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(project) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		}
-	}
-	if b.Len() == 0 {
+	base := foldProject(project)
+	if base == "" {
 		return fallbackPrefix
 	}
-	return b.String()
+	return base
 }
 
 // derivePrefixes assigns every project a unique prefix. Overrides are honored
@@ -94,40 +89,30 @@ func derivePrefixes(names []string, overrides map[string]string) map[string]stri
 
 // prefixOverrides reads the manually assigned prefixes.
 func prefixOverrides() (map[string]string, error) {
-	rows, err := db.Query(`SELECT project, prefix FROM project_prefixes`)
+	projects, err := ListProjects()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
 	overrides := map[string]string{}
-	for rows.Next() {
-		var project, prefix string
-		if err := rows.Scan(&project, &prefix); err != nil {
-			return nil, err
+	for _, project := range projects {
+		if project.Key != "" {
+			overrides[project.Name] = project.Key
 		}
-		overrides[project] = prefix
 	}
-	return overrides, rows.Err()
+	return overrides, nil
 }
 
-// projectNames lists every project that has at least one ticket.
+// projectNames lists every known project, whether or not it has tickets yet.
 func projectNames() ([]string, error) {
-	rows, err := db.Query(`SELECT DISTINCT project FROM tickets`)
+	projects, err := ListProjects()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	names := []string{}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		names = append(names, name)
+	names := make([]string, 0, len(projects))
+	for _, project := range projects {
+		names = append(names, project.Name)
 	}
-	return names, rows.Err()
+	return names, nil
 }
 
 // Prefixes maps every known project to its ticket ID prefix.
@@ -143,8 +128,13 @@ func Prefixes() (map[string]string, error) {
 	return derivePrefixes(names, overrides), nil
 }
 
-// PrefixFor returns the ID prefix for a single project.
+// PrefixFor returns the ID prefix for a single project. A variant spelling is
+// resolved first, so the prefix printed after a command is the one the ticket
+// actually got rather than one derived from what the caller typed.
 func PrefixFor(project string) (string, error) {
+	if resolved, err := ResolveProject(project); err == nil {
+		project = resolved
+	}
 	prefixes, err := Prefixes()
 	if err != nil {
 		return "", err
@@ -165,31 +155,44 @@ func PrefixFor(project string) (string, error) {
 	return derivePrefixes(append(names, project), overrides)[project], nil
 }
 
-// SetPrefix pins a project's prefix, overriding the derived one.
-func SetPrefix(project, prefix string) error {
-	if project == "" {
-		return fmt.Errorf("project is required")
+// cleanPrefix validates a prefix a person typed and returns it normalized.
+func cleanPrefix(prefix string) (string, error) {
+	clean := foldProject(prefix)
+	if clean == "" || clean != strings.ToLower(prefix) {
+		return "", fmt.Errorf("prefix must be alphanumeric: %s", prefix)
 	}
-	clean := prefixBase(prefix)
-	if clean != strings.ToLower(prefix) || prefix == "" {
-		return fmt.Errorf("prefix must be alphanumeric: %s", prefix)
-	}
-	// A prefix that collides with another project's override would make refs
-	// ambiguous, and UNIQUE would reject it with a message nobody can act on.
+	return clean, nil
+}
+
+// checkPrefixAvailable rejects a prefix another project has already pinned. The
+// UNIQUE index would catch it too, but with a message nobody can act on.
+func checkPrefixAvailable(project, prefix string) error {
 	overrides, err := prefixOverrides()
 	if err != nil {
 		return err
 	}
 	for other, existing := range overrides {
-		if existing == clean && other != project {
-			return fmt.Errorf("prefix %q is already used by project %q", clean, other)
+		if existing == prefix && other != project {
+			return fmt.Errorf("prefix %q is already used by project %q", prefix, other)
 		}
 	}
-	_, err = db.Exec(
-		`INSERT INTO project_prefixes (project, prefix) VALUES (?, ?)
-		 ON CONFLICT(project) DO UPDATE SET prefix = excluded.prefix`,
-		project, clean,
-	)
+	return nil
+}
+
+// SetPrefix pins a project's prefix, overriding the derived one.
+func SetPrefix(project, prefix string) error {
+	resolved, err := ResolveProject(project)
+	if err != nil {
+		return err
+	}
+	clean, err := cleanPrefix(prefix)
+	if err != nil {
+		return err
+	}
+	if err := checkPrefixAvailable(resolved, clean); err != nil {
+		return err
+	}
+	_, err = db.Exec(`UPDATE projects SET key = ? WHERE name = ?`, clean, resolved)
 	return err
 }
 

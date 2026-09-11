@@ -75,9 +75,10 @@ Use `+"`TIX_DB=%s tix`"+`.
 - List narrow backlogs with `+"`tix list --project %s --status open --limit 10 --json --compact --fields id,title,priority,status`"+`.
 - Add follow-up tickets with `+"`tix add --project %s --body-file PATH --priority N TITLE`"+`.
 - After verification, close work with `+"`tix done ID`"+`.
+- Use the project name `+"`%s`"+` verbatim: an unknown `+"`--project`"+` is rejected, and a new project needs `+"`tix projects add NAME`"+` or `+"`--create`"+`.
 
 %s
-`, tixWorkflowStart, dbPath, project, project, project, tixWorkflowEnd)
+`, tixWorkflowStart, dbPath, project, project, project, project, tixWorkflowEnd)
 }
 
 func appendTixWorkflow(path, section string) (string, error) {

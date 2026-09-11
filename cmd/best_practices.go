@@ -26,7 +26,8 @@ var guide = bestPracticesGuide{
 		"list --project NAME --status open --limit N --json --compact --fields id,title,priority,status",
 		"show ID --json --compact",
 		"add --project NAME --body-file PATH --priority N TITLE",
-		"projects --json --compact",
+		"projects --json --compact  # project names; --project must be one of them",
+		"projects add NAME  # or add --create, for a project that does not exist yet",
 	},
 }
 

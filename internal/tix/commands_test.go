@@ -26,6 +26,18 @@ func setupTestDB(t *testing.T) {
 	})
 }
 
+// newProjects creates the projects a test's tickets belong to, which every
+// ticket now needs: an unknown --project is an error, not a new project.
+func newProjects(t *testing.T, names ...string) {
+	t.Helper()
+
+	for _, name := range names {
+		if _, err := CreateProject(Project{Name: name}); err != nil {
+			t.Fatalf("CreateProject(%q): %v", name, err)
+		}
+	}
+}
+
 func TestDBPathUsesTIXDBOverride(t *testing.T) {
 	t.Setenv("TIX_DB", "/tmp/custom-tix.db")
 
@@ -36,6 +48,7 @@ func TestDBPathUsesTIXDBOverride(t *testing.T) {
 
 func TestAddListNextAndProjectIsolation(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme", "zen")
 
 	firstID, err := Add("fix login bug", "users cannot log in", 2, "acme")
 	if err != nil {
@@ -80,6 +93,7 @@ func TestAddListNextAndProjectIsolation(t *testing.T) {
 
 func TestDoneFiltersOpenListAndNext(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme")
 
 	firstID, err := Add("first", "body one", 1, "acme")
 	if err != nil {
@@ -125,6 +139,7 @@ func TestDoneFiltersOpenListAndNext(t *testing.T) {
 
 func TestListTicketsFilters(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme", "zen")
 
 	firstID, err := Add("first", "body", 1, "acme")
 	if err != nil {
@@ -170,6 +185,7 @@ func TestListTicketsFilters(t *testing.T) {
 
 func TestShowReturnsTicketByID(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme")
 
 	id, err := Add("show me", "full details", 1, "acme")
 	if err != nil {
@@ -199,6 +215,7 @@ func TestShowReturnsTicketByID(t *testing.T) {
 
 func TestClaimNextMarksTicketInProgress(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme")
 
 	if _, err := Add("first", "body", 2, "acme"); err != nil {
 		t.Fatalf("Add first ticket: %v", err)
@@ -231,6 +248,7 @@ func TestClaimNextMarksTicketInProgress(t *testing.T) {
 
 func TestBumpChangesPriorityAndOrdering(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme")
 
 	firstID, err := Add("first", "body", 3, "acme")
 	if err != nil {
@@ -257,6 +275,7 @@ func TestBumpChangesPriorityAndOrdering(t *testing.T) {
 
 func TestProjectsListsStatusCounts(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme", "zen")
 
 	firstID, err := Add("first acme", "body", 2, "acme")
 	if err != nil {
@@ -279,6 +298,7 @@ func TestProjectsListsStatusCounts(t *testing.T) {
 	want := []ProjectSummary{
 		{
 			Project: "acme",
+			Key:     "ac",
 			StatusCounts: map[string]int{
 				"done": 1,
 				"open": 1,
@@ -287,6 +307,7 @@ func TestProjectsListsStatusCounts(t *testing.T) {
 		},
 		{
 			Project: "zen",
+			Key:     "ze",
 			StatusCounts: map[string]int{
 				"open": 1,
 			},
@@ -300,6 +321,7 @@ func TestProjectsListsStatusCounts(t *testing.T) {
 
 func TestRemoveDeletesOnlyWithinProject(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme", "zen")
 
 	acmeID, err := Add("shared", "acme body", 2, "acme")
 	if err != nil {
@@ -329,6 +351,7 @@ func TestRemoveDeletesOnlyWithinProject(t *testing.T) {
 
 func TestMissingTicketErrors(t *testing.T) {
 	setupTestDB(t)
+	newProjects(t, "acme")
 
 	if _, _, err := Bump(99, 1); err == nil || !strings.Contains(err.Error(), "no such ticket: 99") {
 		t.Fatalf("Bump missing ticket error = %v, want no such ticket: 99", err)

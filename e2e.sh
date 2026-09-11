@@ -64,12 +64,30 @@ check_status() {
   fi
 }
 
-# projects are ad-hoc: no create command, the --project string scopes everything
-check "add ticket (defines project acme)" "ac-1 [P2] fix login bug" "$tmp/tix" add --project acme "fix login bug" -b "users can't log in"
+# projects are rows: a name has to be created before tickets can land in it,
+# either up front or with --create on the first ticket
+check "add --create defines project acme" "created project acme" "$tmp/tix" add --project acme "fix login bug" -b "users can't log in" --create
 check "add high-priority ticket" "ac-2 [P0] write docs" "$tmp/tix" add --project acme "write docs" -b "README" -p 0
-check "add ticket in a second project" "ze-3 [P2] refactor parser" "$tmp/tix" add --project zen "refactor parser" -b "split tokens"
+check "add ticket in a second project" "ze-3 [P2] refactor parser" "$tmp/tix" add --project zen "refactor parser" -b "split tokens" --create
 printf "generated body from a file" >"$tmp/body.txt"
-check "add reads body from file" "fi-4 [P1] file-backed ticket" "$tmp/tix" add --project files "file-backed ticket" --body-file "$tmp/body.txt" -p 1
+check "add reads body from file" "fi-4 [P1] file-backed ticket" "$tmp/tix" add --project files "file-backed ticket" --body-file "$tmp/body.txt" -p 1 --create
+
+# an unknown project is the error that stops a typo from forking the backlog
+check "add rejects an unknown project" 'unknown project "acmee"' "$tmp/tix" add --project acmee "typo ticket" -b body
+check "unknown project error lists known ones" "known projects are acme, files, zen" "$tmp/tix" add --project acmee "typo ticket" -b body
+check_status "add with an unknown project exits non-zero" 1 "$tmp/tix" add --project acmee "typo ticket" -b body
+check "list rejects an unknown project" 'unknown project "acmee"' "$tmp/tix" list --project acmee
+check_status "list with an unknown project exits non-zero" 1 "$tmp/tix" list --project acmee
+
+# variant spellings resolve to the project that exists instead of making a new
+# one, which is what agents with no shell history keep producing
+check "a variant spelling lists the real project" "fix login bug" "$tmp/tix" list --project ACME
+check "a punctuated variant resolves too" "fix login bug" "$tmp/tix" list --project a-c-m-e
+# 'acme!' sorts after 'acme', so a prefix derived from the typed name instead of
+# the resolved one would print acm-5 for a ticket that is really ac-5
+check "--create on an existing variant reuses it" "ac-5 [P2] variant ticket" "$tmp/tix" add --project 'acme!' "variant ticket" -b body --create
+check_absent "the variant did not create a second project" "Acme (" "$tmp/tix" projects
+check "rm removes the variant ticket" "ac-5 removed" "$tmp/tix" rm 5 --project acme
 
 check "list shows all acme tickets" "write docs" "$tmp/tix" list --project acme
 check "list acme also shows #1" "fix login bug" "$tmp/tix" list --project acme
@@ -86,6 +104,17 @@ check "projects lists zen counts" "zen (ze) open=1 total=1" "$tmp/tix" projects
 check "projects supports JSON output" '"status_counts": {' "$tmp/tix" projects --json
 check "projects supports compact JSON output" '[{"project":"acme",' "$tmp/tix" projects --json --compact
 check "projects supports JSON field selection" '[{"project":"acme","total":2}' "$tmp/tix" projects --json --compact --fields project,total
+
+# projects can also be created up front, with the ID prefix and repo path the
+# rest of tix reads back
+check "projects add creates a project" "created project sandbox (sbx)" "$tmp/tix" projects add sandbox --key sbx --repo-path /tmp/sandbox
+check "projects lists a project with no tickets" "sandbox (sbx)" "$tmp/tix" projects
+check "projects reports the repo path in JSON" '"repo_path":"/tmp/sandbox"' "$tmp/tix" projects --json --compact
+check "projects add rejects a duplicate" 'project "sandbox" already exists' "$tmp/tix" projects add sandbox
+check "projects add rejects a variant of an existing project" 'already exists as "sandbox"' "$tmp/tix" projects add Sand-Box
+check_status "projects add with a duplicate exits non-zero" 1 "$tmp/tix" projects add SANDBOX
+check_status "listing an empty project succeeds" 0 "$tmp/tix" list --project sandbox
+check "a pinned key prefixes the project's ticket ids" "sbx-6 [P2] sandbox ticket" "$tmp/tix" add --project sandbox "sandbox ticket" -b body
 check "best-practices shows agent loop" "claim-next --project NAME --json --compact" "$tmp/tix" best-practices
 check "agent-guide alias works" "Use: TIX_DB=.tix/tix.db tix" "$tmp/tix" agent-guide
 check "best-practices supports compact JSON" '{"use":"TIX_DB=.tix/tix.db tix",' "$tmp/tix" best-practices --json --compact
@@ -165,6 +194,7 @@ check "claimed ticket appears with all tickets" "refactor parser" "$tmp/tix" lis
 # get through instead of failing with SQLITE_BUSY, and no ticket may be claimed
 # twice
 parallel=8
+"$tmp/tix" projects add par >/dev/null
 for i in $(seq 1 "$parallel"); do
   "$tmp/tix" add --project par "parallel ticket $i" --body "body $i" >/dev/null
 done
@@ -191,6 +221,27 @@ for i in $(seq 1 "$parallel"); do
   "$tmp/tix" add --project par "parallel add $i" --body "body" >"$tmp/add.$i.out" 2>&1 &
 done
 wait
+
+# parallel agents all passing --create race to create the same project; exactly
+# one may win, and none may fail
+for i in $(seq 1 "$parallel"); do
+  "$tmp/tix" add --project racer "racing add $i" --body "body" --create >"$tmp/race.$i.out" 2>&1 &
+done
+wait
+
+raced=$(cat "$tmp"/race.*.out)
+raced_ok=$(grep -c '^ra-[0-9]* ' <<<"$raced" || true)
+raced_created=$(grep -c '^created project racer$' <<<"$raced" || true)
+if [[ "$raced_ok" -eq "$parallel" && "$raced_created" -eq 1 ]]; then
+  echo "ok: $parallel parallel --create adds made one project and $parallel tickets"
+  pass=$((pass + 1))
+else
+  echo "FAIL: $parallel parallel --create adds made one project and $parallel tickets" >&2
+  echo "  successful adds: $raced_ok (want $parallel), projects created: $raced_created (want 1)" >&2
+  echo "$raced" >&2
+  exit 1
+fi
+check "the race created exactly one project" "racer (ra) open=8 total=8" "$tmp/tix" projects
 
 added=$(cat "$tmp"/add.*.out)
 added_ok=$(grep -c '^pa-[0-9]* ' <<<"$added" || true)
