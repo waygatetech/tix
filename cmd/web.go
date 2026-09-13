@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -26,8 +27,8 @@ const webDefaultPort = 7433
 
 // tix web is the one view a per-repo tracker cannot offer: every project's
 // backlog on one page, because every project lives in one database. It stays
-// bound to localhost and read-only — it reads the same file the CLI writes, so
-// there is nothing here to authenticate and nothing to lose.
+// bound to localhost — it reads and writes the same file the CLI does, so
+// there is nothing here to authenticate beyond that.
 var webCmd = &cobra.Command{
 	Use:   "web",
 	Short: "Serve a cross-project dashboard of every ticket",
@@ -43,6 +44,8 @@ var webCmd = &cobra.Command{
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", webHandler)
 		mux.HandleFunc("/api/dashboard", webAPIHandler)
+		mux.HandleFunc("POST /api/tickets", webCreateTicketHandler)
+		mux.HandleFunc("PATCH /api/tickets/{id}", webEditTicketHandler)
 
 		addr := fmt.Sprintf("localhost:%d", webPort)
 		fmt.Fprintf(cmd.OutOrStdout(), "tix web running at http://%s\n", addr)
@@ -121,4 +124,94 @@ func webAPIHandler(w http.ResponseWriter, r *http.Request) {
 	if err := encoder.Encode(board); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// webNewTicketRequest is the body of a create request. Priority and body are
+// optional the same way `tix add` treats them.
+type webNewTicketRequest struct {
+	Title    string `json:"title"`
+	Body     string `json:"body"`
+	Priority int    `json:"priority"`
+	Project  string `json:"project"`
+	ParentID *int   `json:"parent_id,omitempty"`
+}
+
+// webCreateTicketHandler backs the dashboard's "new ticket" form with the same
+// path `tix add` takes, so a ticket made from the browser behaves exactly like
+// one made from the CLI — project resolution, parent checks, ordering all
+// included.
+func webCreateTicketHandler(w http.ResponseWriter, r *http.Request) {
+	var req webNewTicketRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Title) == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Project) == "" {
+		http.Error(w, "project is required", http.StatusBadRequest)
+		return
+	}
+
+	id, err := tix.Add(req.Title, req.Body, req.Priority, req.Project, req.ParentID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ticket, err := tix.Show(int(id))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(ticket)
+}
+
+// webEditTicketRequest is the body of an edit request. Every field is a
+// pointer so an absent field leaves that column untouched, matching
+// tix.EditOptions.
+type webEditTicketRequest struct {
+	Title       *string `json:"title"`
+	Body        *string `json:"body"`
+	Status      *string `json:"status"`
+	Priority    *int    `json:"priority"`
+	Project     *string `json:"project"`
+	ParentID    *int    `json:"parent_id"`
+	ClearParent bool    `json:"clear_parent"`
+}
+
+// webEditTicketHandler backs inline edits made from an expanded ticket row.
+func webEditTicketHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "invalid ticket id", http.StatusBadRequest)
+		return
+	}
+
+	var req webEditTicketRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ticket, err := tix.Edit(id, tix.EditOptions{
+		Title:       req.Title,
+		Body:        req.Body,
+		Status:      req.Status,
+		Priority:    req.Priority,
+		Project:     req.Project,
+		ParentID:    req.ParentID,
+		ClearParent: req.ClearParent,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(ticket)
 }

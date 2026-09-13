@@ -174,6 +174,44 @@
     box-shadow: 0 4px 14px rgba(16, 24, 40, .25);
   }
   [hidden] { display: none !important; }
+
+  .primary {
+    font: inherit; font-weight: 600; cursor: pointer; color: #fff;
+    background: var(--accent); border: 1px solid var(--accent);
+    border-radius: 7px; padding: .4rem .8rem;
+  }
+  .primary:hover { filter: brightness(1.08); }
+
+  /* New-ticket / edit forms */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(16, 24, 40, .45);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 4rem 1rem; z-index: 10;
+  }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: var(--shadow); width: 100%; max-width: 480px; padding: 1.1rem 1.2rem;
+  }
+  .modal h3 { margin: 0 0 .8rem; font-size: 1rem; }
+  .field { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .7rem; }
+  .field label { font-size: .78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .field input, .field textarea, .field select {
+    font: inherit; color: var(--text); background: var(--panel-alt);
+    border: 1px solid var(--border); border-radius: 7px; padding: .45rem .6rem;
+  }
+  .field input:focus, .field textarea:focus, .field select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .field textarea { resize: vertical; min-height: 4.5rem; font-family: inherit; }
+  .field-row { display: flex; gap: .6rem; }
+  .field-row .field { flex: 1; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .3rem; }
+  .modal-error { color: #b42318; font-size: .82rem; margin: -.2rem 0 .7rem; }
+
+  /* Inline edit within an expanded ticket row */
+  tr.body .view { display: flex; align-items: flex-start; gap: .6rem; }
+  tr.body .view pre { flex: 1; }
+  tr.body .edit-form { display: flex; flex-direction: column; gap: .55rem; }
+  tr.body .edit-form textarea { width: 100%; }
+  tr.body .edit-form .field-row { align-items: flex-end; }
 </style>
 </head>
 <body>
@@ -187,6 +225,7 @@
     </p>
   </div>
   <div class="spacer"></div>
+  {{if .Projects}}<button class="primary" id="newTicket" type="button">New ticket</button>{{end}}
   <button class="ghost" id="theme" type="button" aria-label="Toggle dark mode">Theme</button>
 </div>
 
@@ -247,6 +286,7 @@
       <tbody>
         {{range .Tickets}}
         <tr class="ticket{{if eq .Status "done"}} done{{end}}"
+            data-id="{{.ID}}"
             data-status="{{.Status}}"
             data-priority="{{.Priority}}"
             data-text="{{.Ref}} {{.Title}} {{.Body}}">
@@ -255,8 +295,15 @@
           <td class="state"><span class="status status-{{.Status | statusClass}}">{{.Status | label}}</span></td>
           <td class="title">{{.Title}}<span class="caret">▸</span></td>
         </tr>
-        <tr class="body{{if not .Body}} nobody{{end}}" hidden>
-          <td colspan="4"><pre>{{if .Body}}{{.Body}}{{else}}No body.{{end}}</pre></td>
+        <tr class="body{{if not .Body}} nobody{{end}}"
+            data-id="{{.ID}}" data-title="{{.Title}}" data-body="{{.Body}}"
+            data-status="{{.Status}}" data-priority="{{.Priority}}" hidden>
+          <td colspan="4">
+            <div class="view">
+              <pre>{{if .Body}}{{.Body}}{{else}}No body.{{end}}</pre>
+              <button class="ghost edit-toggle" type="button">Edit</button>
+            </div>
+          </td>
         </tr>
         {{end}}
       </tbody>
@@ -283,6 +330,40 @@
 
 <button class="banner" id="banner" type="button" hidden>Backlog changed — reload</button>
 
+{{if .Projects}}
+<div class="modal-backdrop" id="newTicketModal" hidden>
+  <div class="modal">
+    <h3>New ticket</h3>
+    <p class="modal-error" id="newTicketError" hidden></p>
+    <form id="newTicketForm">
+      <div class="field">
+        <label for="ntProject">Project</label>
+        <select id="ntProject" required>
+          {{range .Projects}}<option value="{{.Project}}">{{.Project}}</option>{{end}}
+        </select>
+      </div>
+      <div class="field">
+        <label for="ntTitle">Title</label>
+        <input type="text" id="ntTitle" required autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="ntBody">Body</label>
+        <textarea id="ntBody"></textarea>
+      </div>
+      <div class="field">
+        <label for="ntPriority">Priority</label>
+        <input type="number" id="ntPriority" value="0" step="1">
+      </div>
+      <div class="modal-actions">
+        <button class="ghost" type="button" id="ntCancel">Cancel</button>
+        <button class="primary" type="submit">Create</button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}
+
+<script id="statusOptions" type="application/json">{{.Statuses}}</script>
 <script>
 (function () {
   var root = document.documentElement;
@@ -431,6 +512,175 @@
       var body = row.nextElementSibling;
       body.hidden = !body.hidden;
       row.querySelector(".caret").textContent = body.hidden ? "▸" : "▾";
+    });
+  });
+
+  // Statuses available for the edit form's dropdown, taken from what the
+  // backlog actually contains rather than hardcoded here.
+  var statusOptions = [];
+  try {
+    var raw = document.getElementById("statusOptions");
+    if (raw) statusOptions = JSON.parse(raw.textContent) || [];
+  } catch (e) {}
+
+  function apiError(res) {
+    return res.text().then(function (text) {
+      throw new Error(text.trim() || ("request failed (" + res.status + ")"));
+    });
+  }
+
+  // New ticket modal
+  var newTicketBtn = document.getElementById("newTicket");
+  var newTicketModal = document.getElementById("newTicketModal");
+  var newTicketForm = document.getElementById("newTicketForm");
+  var newTicketError = document.getElementById("newTicketError");
+
+  if (newTicketBtn && newTicketModal) {
+    function openNewTicket() {
+      newTicketError.hidden = true;
+      newTicketForm.reset();
+      if (projectSelect.value) document.getElementById("ntProject").value = projectSelect.value;
+      newTicketModal.hidden = false;
+      document.getElementById("ntTitle").focus();
+    }
+    function closeNewTicket() { newTicketModal.hidden = true; }
+
+    newTicketBtn.addEventListener("click", openNewTicket);
+    document.getElementById("ntCancel").addEventListener("click", closeNewTicket);
+    newTicketModal.addEventListener("click", function (e) {
+      if (e.target === newTicketModal) closeNewTicket();
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !newTicketModal.hidden) closeNewTicket();
+    });
+
+    newTicketForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      newTicketError.hidden = true;
+      var payload = {
+        project: document.getElementById("ntProject").value,
+        title: document.getElementById("ntTitle").value.trim(),
+        body: document.getElementById("ntBody").value,
+        priority: parseInt(document.getElementById("ntPriority").value, 10) || 0
+      };
+      fetch("/api/tickets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }).then(function (res) {
+        if (!res.ok) return apiError(res);
+        location.reload();
+      }).catch(function (err) {
+        newTicketError.textContent = err.message;
+        newTicketError.hidden = false;
+      });
+    });
+  }
+
+  // Inline editing of an expanded ticket
+  board.addEventListener("click", function (e) {
+    var toggle = e.target.closest(".edit-toggle");
+    if (!toggle) return;
+    e.stopPropagation();
+
+    var bodyRow = toggle.closest("tr.body");
+    var id = bodyRow.dataset.id;
+    var cell = bodyRow.querySelector("td");
+    cell.innerHTML = "";
+
+    var form = document.createElement("form");
+    form.className = "edit-form";
+
+    var titleField = document.createElement("div");
+    titleField.className = "field";
+    titleField.innerHTML = '<label>Title</label>';
+    var titleInput = document.createElement("input");
+    titleInput.type = "text";
+    titleInput.required = true;
+    titleInput.value = bodyRow.dataset.title;
+    titleField.appendChild(titleInput);
+
+    var bodyField = document.createElement("div");
+    bodyField.className = "field";
+    bodyField.innerHTML = '<label>Body</label>';
+    var bodyInput = document.createElement("textarea");
+    bodyInput.value = bodyRow.dataset.body;
+    bodyField.appendChild(bodyInput);
+
+    var row = document.createElement("div");
+    row.className = "field-row";
+
+    var statusField = document.createElement("div");
+    statusField.className = "field";
+    statusField.innerHTML = '<label>Status</label>';
+    var statusSelect = document.createElement("select");
+    statusOptions.forEach(function (status) {
+      var opt = document.createElement("option");
+      opt.value = status;
+      opt.textContent = status.replace(/_/g, " ");
+      if (status === bodyRow.dataset.status) opt.selected = true;
+      statusSelect.appendChild(opt);
+    });
+    statusField.appendChild(statusSelect);
+
+    var priorityField = document.createElement("div");
+    priorityField.className = "field";
+    priorityField.innerHTML = '<label>Priority</label>';
+    var priorityInput = document.createElement("input");
+    priorityInput.type = "number";
+    priorityInput.step = "1";
+    priorityInput.value = bodyRow.dataset.priority;
+    priorityField.appendChild(priorityInput);
+
+    row.appendChild(statusField);
+    row.appendChild(priorityField);
+
+    var error = document.createElement("p");
+    error.className = "modal-error";
+    error.hidden = true;
+
+    var actions = document.createElement("div");
+    actions.className = "modal-actions";
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "ghost";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", function () { location.reload(); });
+    var save = document.createElement("button");
+    save.type = "submit";
+    save.className = "primary";
+    save.textContent = "Save";
+    actions.appendChild(cancel);
+    actions.appendChild(save);
+
+    form.appendChild(titleField);
+    form.appendChild(bodyField);
+    form.appendChild(row);
+    form.appendChild(error);
+    form.appendChild(actions);
+    cell.appendChild(form);
+
+    form.addEventListener("click", function (e) { e.stopPropagation(); });
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      error.hidden = true;
+      var payload = {
+        title: titleInput.value.trim(),
+        body: bodyInput.value,
+        status: statusSelect.value,
+        priority: parseInt(priorityInput.value, 10) || 0
+      };
+      fetch("/api/tickets/" + id, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }).then(function (res) {
+        if (!res.ok) return apiError(res);
+        location.reload();
+      }).catch(function (err) {
+        error.textContent = err.message;
+        error.hidden = false;
+      });
     });
   });
 

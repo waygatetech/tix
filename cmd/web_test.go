@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,6 +28,38 @@ func get(t *testing.T, handler http.HandlerFunc, target string) *httptest.Respon
 
 	recorder := httptest.NewRecorder()
 	handler(recorder, httptest.NewRequest(http.MethodGet, target, nil))
+	return recorder
+}
+
+// webTestMux mirrors the routes wired up in webCmd.RunE, since the edit
+// handler reads its id from a pattern that only a ServeMux populates.
+func webTestMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", webHandler)
+	mux.HandleFunc("/api/dashboard", webAPIHandler)
+	mux.HandleFunc("POST /api/tickets", webCreateTicketHandler)
+	mux.HandleFunc("PATCH /api/tickets/{id}", webEditTicketHandler)
+	return mux
+}
+
+func do(t *testing.T, mux *http.ServeMux, method, target string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	var reader *bytes.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal request body: %v", err)
+		}
+		reader = bytes.NewReader(encoded)
+	} else {
+		reader = bytes.NewReader(nil)
+	}
+
+	req := httptest.NewRequest(method, target, reader)
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
 	return recorder
 }
 
@@ -157,5 +191,118 @@ func TestWebLabelAndStatusClass(t *testing.T) {
 	}
 	if got := webStatusClass("blocked"); got != "other" {
 		t.Fatalf("webStatusClass(blocked) = %q, want other", got)
+	}
+}
+
+func TestWebCreateTicketHandlerAddsATicket(t *testing.T) {
+	setupWebDB(t)
+	if _, err := tix.CreateProject(tix.Project{Name: "acme", Key: "ac"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	mux := webTestMux()
+
+	recorder := do(t, mux, http.MethodPost, "/api/tickets", webNewTicketRequest{
+		Title:    "fix login",
+		Body:     "users cannot log in",
+		Priority: 1,
+		Project:  "acme",
+	})
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var ticket tix.Ticket
+	if err := json.Unmarshal(recorder.Body.Bytes(), &ticket); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if ticket.Title != "fix login" || ticket.Project != "acme" || ticket.Priority != 1 {
+		t.Fatalf("ticket = %+v, want title=fix login project=acme priority=1", ticket)
+	}
+
+	tickets, err := tix.ListTickets(tix.ListOptions{Project: "acme", ShowAll: true})
+	if err != nil {
+		t.Fatalf("ListTickets: %v", err)
+	}
+	if len(tickets) != 1 {
+		t.Fatalf("ListTickets returned %d tickets, want 1", len(tickets))
+	}
+}
+
+func TestWebCreateTicketHandlerRejectsMissingTitle(t *testing.T) {
+	setupWebDB(t)
+	if _, err := tix.CreateProject(tix.Project{Name: "acme"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	mux := webTestMux()
+
+	recorder := do(t, mux, http.MethodPost, "/api/tickets", webNewTicketRequest{Project: "acme"})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+}
+
+func TestWebCreateTicketHandlerRejectsUnknownProject(t *testing.T) {
+	setupWebDB(t)
+	mux := webTestMux()
+
+	recorder := do(t, mux, http.MethodPost, "/api/tickets", webNewTicketRequest{Title: "x", Project: "ghost"})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestWebEditTicketHandlerUpdatesFields(t *testing.T) {
+	setupWebDB(t)
+	if _, err := tix.CreateProject(tix.Project{Name: "acme"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	id, err := tix.Add("fix login", "old body", 0, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	mux := webTestMux()
+
+	newTitle := "fix login flow"
+	newBody := "new body"
+	newStatus := "in_progress"
+	newPriority := 2
+	recorder := do(t, mux, http.MethodPatch, fmt.Sprintf("/api/tickets/%d", id), webEditTicketRequest{
+		Title:    &newTitle,
+		Body:     &newBody,
+		Status:   &newStatus,
+		Priority: &newPriority,
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+
+	ticket, err := tix.Show(int(id))
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	if ticket.Title != newTitle || ticket.Body != newBody || ticket.Status != newStatus || ticket.Priority != newPriority {
+		t.Fatalf("ticket = %+v, want updated fields", ticket)
+	}
+}
+
+func TestWebEditTicketHandlerRejectsUnknownTicket(t *testing.T) {
+	setupWebDB(t)
+	mux := webTestMux()
+
+	newTitle := "x"
+	recorder := do(t, mux, http.MethodPatch, "/api/tickets/999", webEditTicketRequest{Title: &newTitle})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestWebEditTicketHandlerRejectsInvalidID(t *testing.T) {
+	setupWebDB(t)
+	mux := webTestMux()
+
+	newTitle := "x"
+	recorder := do(t, mux, http.MethodPatch, "/api/tickets/nope", webEditTicketRequest{Title: &newTitle})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
 	}
 }
