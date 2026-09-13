@@ -626,6 +626,38 @@ func TestBumpChangesPriorityAndOrdering(t *testing.T) {
 	}
 }
 
+func TestReorderChangesSequenceWithinPriority(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	firstID, err := Add("first", "body", 1, "acme")
+	if err != nil {
+		t.Fatalf("Add first ticket: %v", err)
+	}
+	secondID, err := Add("second", "body", 1, "acme")
+	if err != nil {
+		t.Fatalf("Add second ticket: %v", err)
+	}
+	thirdID, err := Add("third", "body", 1, "acme")
+	if err != nil {
+		t.Fatalf("Add third ticket: %v", err)
+	}
+
+	if err := Reorder([]int{int(thirdID), int(firstID), int(secondID)}); err != nil {
+		t.Fatalf("Reorder: %v", err)
+	}
+
+	got := listLines(t, "acme", false)
+	want := []string{"ac-3 [P1] third", "ac-1 [P1] first", "ac-2 [P1] second"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("listLines(acme, false) after Reorder = %#v, want %#v", got, want)
+	}
+
+	if err := Reorder([]int{99999}); err == nil {
+		t.Fatal("Reorder with unknown id: want error, got nil")
+	}
+}
+
 func TestProjectsListsStatusCounts(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme", "zen")

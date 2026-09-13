@@ -89,6 +89,44 @@ func Bump(id, priority int) (int, int, error) {
 	return id, priority, nil
 }
 
+// Reorder assigns fresh, consecutive order_rank values to the given tickets in
+// the order listed, placing them after every existing order_rank so the
+// sequence is unambiguous without disturbing tickets left out of the call.
+// Tickets still tie-break by priority first, so a custom sequence is only
+// visible among tickets that share a priority.
+func Reorder(ids []int) error {
+	if len(ids) == 0 {
+		return errors.New("no tickets given")
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var maxRank int
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(order_rank), 0) FROM tickets`).Scan(&maxRank); err != nil {
+		return err
+	}
+
+	for i, id := range ids {
+		res, err := tx.Exec(
+			`UPDATE tickets SET order_rank = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+			maxRank+i+1, id,
+		)
+		if err != nil {
+			return errors.New("update failed")
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return fmt.Errorf("no such ticket: %d", id)
+		}
+	}
+
+	return tx.Commit()
+}
+
 func Done(id int) error {
 	res, err := db.Exec(`UPDATE tickets SET status = 'done', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
 	if err != nil {
