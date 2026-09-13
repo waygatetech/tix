@@ -39,10 +39,10 @@ func TestWebHandlerRendersEveryProject(t *testing.T) {
 	if _, err := tix.CreateProject(tix.Project{Name: "zen"}); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	if _, err := tix.Add("fix login", "users cannot log in", 0, "acme"); err != nil {
+	if _, err := tix.Add("fix login", "users cannot log in", 0, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if _, err := tix.Add("tune cache", "", 2, "zen"); err != nil {
+	if _, err := tix.Add("tune cache", "", 2, "zen", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -105,7 +105,7 @@ func TestWebAPIHandlerServesTheSameView(t *testing.T) {
 	if _, err := tix.CreateProject(tix.Project{Name: "acme", Key: "ac"}); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	if _, err := tix.Add("fix login", "users cannot log in", 0, "acme"); err != nil {
+	if _, err := tix.Add("fix login", "users cannot log in", 0, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -138,7 +138,7 @@ func TestWebAPIHandlerOutputChangesWithTheBacklog(t *testing.T) {
 	}
 
 	before := get(t, webAPIHandler, "/api/dashboard").Body.String()
-	if _, err := tix.Add("fix login", "", 2, "acme"); err != nil {
+	if _, err := tix.Add("fix login", "", 2, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	after := get(t, webAPIHandler, "/api/dashboard").Body.String()

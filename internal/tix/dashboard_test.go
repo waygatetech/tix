@@ -11,14 +11,14 @@ func TestBuildDashboardGroupsEveryProject(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme", "zen")
 
-	if _, err := Add("fix login", "cannot log in", 0, "acme"); err != nil {
+	if _, err := Add("fix login", "cannot log in", 0, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	shipped, err := Add("ship docs", "", 2, "acme")
+	shipped, err := Add("ship docs", "", 2, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if _, err := Add("tune cache", "", 1, "zen"); err != nil {
+	if _, err := Add("tune cache", "", 1, "zen", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if err := Done(int(shipped)); err != nil {
@@ -59,7 +59,7 @@ func TestBuildDashboardUsesPrefixedRefs(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	id, err := Add("fix login", "", 2, "acme")
+	id, err := Add("fix login", "", 2, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestBuildDashboardKeepsEmptyProjects(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme", "empty")
 
-	if _, err := Add("fix login", "", 2, "acme"); err != nil {
+	if _, err := Add("fix login", "", 2, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -114,14 +114,14 @@ func TestBuildDashboardSinksDoneTickets(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	first, err := Add("finish first", "", 0, "acme")
+	first, err := Add("finish first", "", 0, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if _, err := Add("still open", "", 1, "acme"); err != nil {
+	if _, err := Add("still open", "", 1, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if _, err := Add("also open", "", 2, "acme"); err != nil {
+	if _, err := Add("also open", "", 2, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if err := Done(int(first)); err != nil {
@@ -146,10 +146,10 @@ func TestBuildDashboardListsPresentStatusesAndPriorities(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	if _, err := Add("claim me", "", 1, "acme"); err != nil {
+	if _, err := Add("claim me", "", 1, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if _, err := Add("leave me", "", 3, "acme"); err != nil {
+	if _, err := Add("leave me", "", 3, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if _, err := ClaimNext("acme"); err != nil {

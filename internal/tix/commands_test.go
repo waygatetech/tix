@@ -109,15 +109,15 @@ func TestAddListNextAndProjectIsolation(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme", "zen")
 
-	firstID, err := Add("fix login bug", "users cannot log in", 2, "acme")
+	firstID, err := Add("fix login bug", "users cannot log in", 2, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add first ticket: %v", err)
 	}
-	secondID, err := Add("write docs", "README", 0, "acme")
+	secondID, err := Add("write docs", "README", 0, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add second ticket: %v", err)
 	}
-	otherID, err := Add("refactor parser", "split tokens", 2, "zen")
+	otherID, err := Add("refactor parser", "split tokens", 2, "zen", nil)
 	if err != nil {
 		t.Fatalf("Add other project ticket: %v", err)
 	}
@@ -155,11 +155,11 @@ func TestDoneFiltersOpenListAndNext(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	firstID, err := Add("first", "body one", 1, "acme")
+	firstID, err := Add("first", "body one", 1, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add first ticket: %v", err)
 	}
-	secondID, err := Add("second", "body two", 2, "acme")
+	secondID, err := Add("second", "body two", 2, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add second ticket: %v", err)
 	}
@@ -201,17 +201,17 @@ func TestListTicketsFilters(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme", "zen")
 
-	firstID, err := Add("first", "body", 1, "acme")
+	firstID, err := Add("first", "body", 1, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add first ticket: %v", err)
 	}
-	if _, err := Add("second", "body", 2, "acme"); err != nil {
+	if _, err := Add("second", "body", 2, "acme", nil); err != nil {
 		t.Fatalf("Add second ticket: %v", err)
 	}
-	if _, err := Add("third", "body", 1, "acme"); err != nil {
+	if _, err := Add("third", "body", 1, "acme", nil); err != nil {
 		t.Fatalf("Add third ticket: %v", err)
 	}
-	if _, err := Add("other project", "body", 1, "zen"); err != nil {
+	if _, err := Add("other project", "body", 1, "zen", nil); err != nil {
 		t.Fatalf("Add other project ticket: %v", err)
 	}
 	if err := Done(int(firstID)); err != nil {
@@ -259,7 +259,7 @@ func TestListTicketsQueryMatchesTitleAndBody(t *testing.T) {
 		{"unrelated", "nothing to see", "acme"},
 		{"search elsewhere", "another backlog", "zen"},
 	} {
-		if _, err := Add(ticket.title, ticket.body, 2, ticket.project); err != nil {
+		if _, err := Add(ticket.title, ticket.body, 2, ticket.project, nil); err != nil {
 			t.Fatalf("Add(%q): %v", ticket.title, err)
 		}
 	}
@@ -326,7 +326,7 @@ func TestListTicketsQuerySeesDoneTickets(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	id, err := Add("fix search timeout", "body", 2, "acme")
+	id, err := Add("fix search timeout", "body", 2, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestShowReturnsTicketByID(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	id, err := Add("show me", "full details", 1, "acme")
+	id, err := Add("show me", "full details", 1, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add ticket: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestWritesMoveUpdatedAt(t *testing.T) {
 			setupTestDB(t)
 			newProjects(t, "acme")
 
-			id, err := Add(tc.name, "body", 2, "acme")
+			id, err := Add(tc.name, "body", 2, "acme", nil)
 			if err != nil {
 				t.Fatalf("Add: %v", err)
 			}
@@ -439,7 +439,7 @@ func TestEmptyEditLeavesUpdatedAtAlone(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	id, err := Add("untouched", "body", 2, "acme")
+	id, err := Add("untouched", "body", 2, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -467,11 +467,11 @@ func TestStaleTicketsFindsAbandonedClaims(t *testing.T) {
 	newProjects(t, "acme", "zen")
 
 	for _, title := range []string{"abandoned", "very abandoned", "just claimed", "still open"} {
-		if _, err := Add(title, "body", 2, "acme"); err != nil {
+		if _, err := Add(title, "body", 2, "acme", nil); err != nil {
 			t.Fatalf("Add(%q): %v", title, err)
 		}
 	}
-	if _, err := Add("other backlog", "body", 2, "zen"); err != nil {
+	if _, err := Add("other backlog", "body", 2, "zen", nil); err != nil {
 		t.Fatalf("Add(zen): %v", err)
 	}
 
@@ -571,10 +571,10 @@ func TestClaimNextMarksTicketInProgress(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	if _, err := Add("first", "body", 2, "acme"); err != nil {
+	if _, err := Add("first", "body", 2, "acme", nil); err != nil {
 		t.Fatalf("Add first ticket: %v", err)
 	}
-	if _, err := Add("second", "body", 0, "acme"); err != nil {
+	if _, err := Add("second", "body", 0, "acme", nil); err != nil {
 		t.Fatalf("Add second ticket: %v", err)
 	}
 
@@ -603,11 +603,11 @@ func TestBumpChangesPriorityAndOrdering(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	firstID, err := Add("first", "body", 3, "acme")
+	firstID, err := Add("first", "body", 3, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add first ticket: %v", err)
 	}
-	if _, err := Add("second", "body", 1, "acme"); err != nil {
+	if _, err := Add("second", "body", 1, "acme", nil); err != nil {
 		t.Fatalf("Add second ticket: %v", err)
 	}
 
@@ -630,15 +630,15 @@ func TestReorderChangesSequenceWithinPriority(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	firstID, err := Add("first", "body", 1, "acme")
+	firstID, err := Add("first", "body", 1, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add first ticket: %v", err)
 	}
-	secondID, err := Add("second", "body", 1, "acme")
+	secondID, err := Add("second", "body", 1, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add second ticket: %v", err)
 	}
-	thirdID, err := Add("third", "body", 1, "acme")
+	thirdID, err := Add("third", "body", 1, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add third ticket: %v", err)
 	}
@@ -662,14 +662,14 @@ func TestProjectsListsStatusCounts(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme", "zen")
 
-	firstID, err := Add("first acme", "body", 2, "acme")
+	firstID, err := Add("first acme", "body", 2, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add acme ticket: %v", err)
 	}
-	if _, err := Add("zen", "body", 2, "zen"); err != nil {
+	if _, err := Add("zen", "body", 2, "zen", nil); err != nil {
 		t.Fatalf("Add zen ticket: %v", err)
 	}
-	if _, err := Add("second acme", "body", 2, "acme"); err != nil {
+	if _, err := Add("second acme", "body", 2, "acme", nil); err != nil {
 		t.Fatalf("Add second acme ticket: %v", err)
 	}
 	if err := Done(int(firstID)); err != nil {
@@ -708,11 +708,11 @@ func TestRemoveDeletesOnlyWithinProject(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme", "zen")
 
-	acmeID, err := Add("shared", "acme body", 2, "acme")
+	acmeID, err := Add("shared", "acme body", 2, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add acme ticket: %v", err)
 	}
-	if _, err := Add("shared", "zen body", 2, "zen"); err != nil {
+	if _, err := Add("shared", "zen body", 2, "zen", nil); err != nil {
 		t.Fatalf("Add zen ticket: %v", err)
 	}
 
@@ -731,6 +731,106 @@ func TestRemoveDeletesOnlyWithinProject(t *testing.T) {
 	want := []string{"ze-2 [P2] shared"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("listLines(zen, true) after Remove = %#v, want %#v", got, want)
+	}
+}
+
+func TestAddWithParentGroupsUnderEpic(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	epicID, err := Add("epic", "body", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add(epic): %v", err)
+	}
+	epic := int(epicID)
+	childID, err := Add("child", "body", 2, "acme", &epic)
+	if err != nil {
+		t.Fatalf("Add(child): %v", err)
+	}
+
+	child, err := Show(int(childID))
+	if err != nil {
+		t.Fatalf("Show(child): %v", err)
+	}
+	if child.ParentID == nil || *child.ParentID != epic {
+		t.Fatalf("child.ParentID = %v, want %d", child.ParentID, epic)
+	}
+
+	children, err := ListTickets(ListOptions{Project: "acme", ShowAll: true, ParentID: &epic})
+	if err != nil {
+		t.Fatalf("ListTickets(ParentID): %v", err)
+	}
+	if len(children) != 1 || children[0].ID != int(childID) {
+		t.Fatalf("ListTickets(ParentID) = %#v, want just the child", children)
+	}
+}
+
+func TestAddRejectsAParentFromAnotherProject(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme", "zen")
+
+	epicID, err := Add("epic", "body", 2, "zen", nil)
+	if err != nil {
+		t.Fatalf("Add(epic): %v", err)
+	}
+	epic := int(epicID)
+	if _, err := Add("child", "body", 2, "acme", &epic); err == nil || !strings.Contains(err.Error(), "belongs to project") {
+		t.Fatalf("Add(child) error = %v, want a cross-project parent error", err)
+	}
+}
+
+func TestEditSetsAndClearsParent(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	epicID, err := Add("epic", "body", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add(epic): %v", err)
+	}
+	childID, err := Add("child", "body", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add(child): %v", err)
+	}
+
+	epic := int(epicID)
+	ticket, err := Edit(int(childID), EditOptions{ParentID: &epic})
+	if err != nil {
+		t.Fatalf("Edit(set parent): %v", err)
+	}
+	if ticket.ParentID == nil || *ticket.ParentID != epic {
+		t.Fatalf("ticket.ParentID = %v, want %d", ticket.ParentID, epic)
+	}
+
+	ticket, err = Edit(int(childID), EditOptions{ClearParent: true})
+	if err != nil {
+		t.Fatalf("Edit(clear parent): %v", err)
+	}
+	if ticket.ParentID != nil {
+		t.Fatalf("ticket.ParentID = %v, want nil after clearing", ticket.ParentID)
+	}
+}
+
+func TestEditRejectsSelfAndCyclicParents(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	firstID, err := Add("first", "body", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add(first): %v", err)
+	}
+	first := int(firstID)
+	if _, err := Edit(first, EditOptions{ParentID: &first}); err == nil || !strings.Contains(err.Error(), "own parent") {
+		t.Fatalf("Edit(self parent) error = %v, want a self-parent error", err)
+	}
+
+	secondID, err := Add("second", "body", 2, "acme", &first)
+	if err != nil {
+		t.Fatalf("Add(second, parent=first): %v", err)
+	}
+	second := int(secondID)
+
+	if _, err := Edit(first, EditOptions{ParentID: &second}); err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("Edit(first, parent=second) error = %v, want a cycle error", err)
 	}
 }
 

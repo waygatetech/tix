@@ -116,7 +116,7 @@ func TestResolveRefRejectsWrongProjectPrefix(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	acmeID, err := Add("fix login bug", "", 2, "acme")
+	acmeID, err := Add("fix login bug", "", 2, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add acme ticket: %v", err)
 	}
@@ -148,10 +148,10 @@ func TestSetPrefixOverridesAndRejectsDuplicates(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme", "zen")
 
-	if _, err := Add("fix login bug", "", 2, "acme"); err != nil {
+	if _, err := Add("fix login bug", "", 2, "acme", nil); err != nil {
 		t.Fatalf("Add acme ticket: %v", err)
 	}
-	if _, err := Add("refactor parser", "", 2, "zen"); err != nil {
+	if _, err := Add("refactor parser", "", 2, "zen", nil); err != nil {
 		t.Fatalf("Add zen ticket: %v", err)
 	}
 

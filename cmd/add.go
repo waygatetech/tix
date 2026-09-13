@@ -14,6 +14,7 @@ var priority int
 var body string
 var bodyFile string
 var createProject bool
+var parentRef string
 
 var addCmd = &cobra.Command{
 	Use:               "add",
@@ -64,7 +65,16 @@ var addCmd = &cobra.Command{
 			project = resolved
 		}
 
-		id, err := tix.Add(title, body, priority, project)
+		var parentID *int
+		if parentRef != "" {
+			id, err := tix.ResolveRef(parentRef)
+			if err != nil {
+				return err
+			}
+			parentID = &id
+		}
+
+		id, err := tix.Add(title, body, priority, project, parentID)
 		if err != nil {
 			return fmt.Errorf("add failed: %w", err)
 		}
@@ -83,5 +93,6 @@ func init() {
 	addCmd.Flags().StringVarP(&body, "body", "b", "", "ticket body")
 	addCmd.Flags().StringVar(&bodyFile, "body-file", "", "read ticket body from file")
 	addCmd.Flags().IntVarP(&priority, "priority", "p", 2, "ticket priority")
+	addCmd.Flags().StringVar(&parentRef, "parent", "", "parent ticket to group this one under (epic)")
 	rootCmd.AddCommand(addCmd)
 }

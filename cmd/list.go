@@ -14,6 +14,7 @@ var compactOutput bool
 var statusFilter string
 var priorityFilter string
 var limitFilter int
+var parentFilter string
 
 var listCmd = &cobra.Command{
 	Use:               "list",
@@ -63,6 +64,7 @@ func init() {
 	listCmd.Flags().StringVar(&statusFilter, "status", "", "filter by status")
 	listCmd.Flags().StringVar(&priorityFilter, "priority", "", "filter by priority")
 	listCmd.Flags().IntVar(&limitFilter, "limit", 0, "limit number of tickets")
+	listCmd.Flags().StringVar(&parentFilter, "parent", "", "only tickets grouped under this parent ticket (epic)")
 	listCmd.Flags().BoolVar(&jsonOutput, "json", false, "output tickets as JSON")
 	listCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
 	listCmd.Flags().StringVar(&fieldsOutput, "fields", "", "comma-separated JSON fields to include")
@@ -89,6 +91,13 @@ func listOptions() (tix.ListOptions, error) {
 	}
 	if options.Limit < 0 {
 		return tix.ListOptions{}, fmt.Errorf("limit must be >= 0")
+	}
+	if parentFilter != "" {
+		parentID, err := tix.ResolveRef(parentFilter)
+		if err != nil {
+			return tix.ListOptions{}, err
+		}
+		options.ParentID = &parentID
 	}
 	return options, nil
 }

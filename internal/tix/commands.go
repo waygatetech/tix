@@ -1,6 +1,7 @@
 package tix
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
@@ -15,6 +16,9 @@ type Ticket struct {
 	Status   string `json:"status"`
 	Priority int    `json:"priority"`
 	Project  string `json:"project"`
+	// ParentID groups this ticket under an epic: the id of another ticket in
+	// the same project, or nil when this ticket has no parent.
+	ParentID *int `json:"parent_id,omitempty"`
 	// CreatedAt and UpdatedAt are stored UTC, and UpdatedAt moves on every
 	// write, so how long a ticket has sat in its current status is answerable.
 	CreatedAt time.Time `json:"created_at"`
@@ -24,14 +28,19 @@ type Ticket struct {
 // ticketColumns is the select list every ticket read shares, paired with
 // scanTicket below: a column added to one and not the other is a scan error at
 // runtime, so they are kept next to each other.
-const ticketColumns = `id, title, body, status, priority, project, created_at, updated_at`
+const ticketColumns = `id, title, body, status, priority, project, parent_id, created_at, updated_at`
 
 // scanTicket reads one row of ticketColumns. It takes the Scan method rather
 // than a row type so both *sql.Row and *sql.Rows can be handed to it.
 func scanTicket(scan func(...any) error) (Ticket, error) {
 	var ticket Ticket
+	var parentID sql.NullInt64
 	err := scan(&ticket.ID, &ticket.Title, &ticket.Body, &ticket.Status,
-		&ticket.Priority, &ticket.Project, &ticket.CreatedAt, &ticket.UpdatedAt)
+		&ticket.Priority, &ticket.Project, &parentID, &ticket.CreatedAt, &ticket.UpdatedAt)
+	if parentID.Valid {
+		id := int(parentID.Int64)
+		ticket.ParentID = &id
+	}
 	return ticket, err
 }
 
@@ -54,27 +63,102 @@ type ListOptions struct {
 	Query    string
 	Priority *int
 	Limit    int
+	// ParentID, when set, keeps only tickets grouped under this parent
+	// ticket (its children), instead of every ticket in the project.
+	ParentID *int
 }
 
-func Add(title, body string, priority int, project string) (int64, error) {
+func Add(title, body string, priority int, project string, parentID *int) (int64, error) {
 	project, err := ResolveProject(project)
 	if err != nil {
 		return 0, err
+	}
+	if parentID != nil {
+		if err := checkParent(*parentID, project); err != nil {
+			return 0, err
+		}
 	}
 
 	var maxRank int
 	db.QueryRow(`SELECT COALESCE(MAX(order_rank), 0) FROM tickets`).Scan(&maxRank)
 
 	res, err := db.Exec(
-		`INSERT INTO tickets (title, body, priority, order_rank, project, updated_at)
-			 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-		title, body, priority, maxRank+1, project,
+		`INSERT INTO tickets (title, body, priority, order_rank, project, parent_id, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		title, body, priority, maxRank+1, project, nullableInt(parentID),
 	)
 	if err != nil {
 		return 0, err
 	}
 	id, _ := res.LastInsertId()
 	return id, nil
+}
+
+// checkParent reports whether id can be used as a parent for a ticket in
+// project: the ticket must exist and belong to the same project, since a
+// child grouped under a parent in another project's backlog would be
+// invisible to anyone scoped to either one.
+func checkParent(id int, project string) error {
+	var parentProject string
+	if err := db.QueryRow(`SELECT project FROM tickets WHERE id = ?`, id).Scan(&parentProject); err != nil {
+		return fmt.Errorf("no such ticket: %d", id)
+	}
+	if parentProject != project {
+		return fmt.Errorf("parent ticket %d belongs to project %q, not %q", id, parentProject, project)
+	}
+	return nil
+}
+
+// descendsFrom reports whether candidate is id itself or anywhere in id's
+// chain of descendants, walking down through parent_id links. Making a
+// ticket's own descendant its parent is what would create a cycle, so Edit
+// checks this before accepting a new parent_id. The depth cap keeps a
+// pathological chain from recursing forever.
+func descendsFrom(candidate, id int) (bool, error) {
+	return descendsFromDepth(candidate, id, 0)
+}
+
+func descendsFromDepth(candidate, id, depth int) (bool, error) {
+	if candidate == id {
+		return true, nil
+	}
+	if depth > 1000 {
+		return false, fmt.Errorf("ticket %d's parent chain is too deep to check", id)
+	}
+	rows, err := db.Query(`SELECT id FROM tickets WHERE parent_id = ?`, id)
+	if err != nil {
+		return false, err
+	}
+	var children []int
+	for rows.Next() {
+		var child int
+		if err := rows.Scan(&child); err != nil {
+			rows.Close()
+			return false, err
+		}
+		children = append(children, child)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	for _, child := range children {
+		if ok, err := descendsFromDepth(candidate, child, depth+1); err != nil {
+			return false, err
+		} else if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// nullableInt turns a possibly-nil *int into the value database/sql sends for
+// a NULL column.
+func nullableInt(v *int) any {
+	if v == nil {
+		return nil
+	}
+	return *v
 }
 
 func Bump(id, priority int) (int, int, error) {
@@ -161,6 +245,10 @@ func ListTickets(options ListOptions) ([]Ticket, error) {
 		where = append(where, `(title LIKE ? ESCAPE '\' OR body LIKE ? ESCAPE '\')`)
 		pattern := likePattern(term)
 		args = append(args, pattern, pattern)
+	}
+	if options.ParentID != nil {
+		where = append(where, `parent_id = ?`)
+		args = append(args, *options.ParentID)
 	}
 	query := `SELECT ` + ticketColumns + ` FROM tickets WHERE ` + strings.Join(where, ` AND `) + ` ORDER BY priority ASC, order_rank ASC`
 	if options.Limit > 0 {
@@ -444,6 +532,11 @@ type EditOptions struct {
 	Status   *string
 	Priority *int
 	Project  *string
+	// ParentID sets the ticket's parent when non-nil; ClearParent removes it
+	// regardless of ParentID. Both unset leaves the parent untouched, the way
+	// a nil field leaves any other column untouched.
+	ParentID    *int
+	ClearParent bool
 }
 
 func Edit(id int, options EditOptions) (Ticket, error) {
@@ -466,6 +559,7 @@ func Edit(id int, options EditOptions) (Ticket, error) {
 		sets = append(sets, `priority = ?`)
 		args = append(args, *options.Priority)
 	}
+	var newProject string
 	if options.Project != nil {
 		// Moving a ticket to a project nobody created would hide it just as
 		// thoroughly as adding it there in the first place.
@@ -473,8 +567,34 @@ func Edit(id int, options EditOptions) (Ticket, error) {
 		if err != nil {
 			return Ticket{}, err
 		}
+		newProject = project
 		sets = append(sets, `project = ?`)
 		args = append(args, project)
+	}
+	if options.ClearParent {
+		sets = append(sets, `parent_id = NULL`)
+	} else if options.ParentID != nil {
+		if *options.ParentID == id {
+			return Ticket{}, errors.New("a ticket cannot be its own parent")
+		}
+		project := newProject
+		if project == "" {
+			current, err := Show(id)
+			if err != nil {
+				return Ticket{}, err
+			}
+			project = current.Project
+		}
+		if err := checkParent(*options.ParentID, project); err != nil {
+			return Ticket{}, err
+		}
+		if cyclic, err := descendsFrom(*options.ParentID, id); err != nil {
+			return Ticket{}, err
+		} else if cyclic {
+			return Ticket{}, fmt.Errorf("setting parent to %d would create a cycle", *options.ParentID)
+		}
+		sets = append(sets, `parent_id = ?`)
+		args = append(args, *options.ParentID)
 	}
 	if len(sets) == 0 {
 		return Ticket{}, errors.New("no fields to update")

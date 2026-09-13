@@ -302,7 +302,7 @@ func TestMigrateUpgradesPreMigrationDatabase(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	if _, err := Add("existing ticket", "", 2, "acme"); err != nil {
+	if _, err := Add("existing ticket", "", 2, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	// A genuinely pre-migration database predates every column the migrations
@@ -310,6 +310,12 @@ func TestMigrateUpgradesPreMigrationDatabase(t *testing.T) {
 	// it in place would test a state no real database is ever in.
 	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN updated_at`); err != nil {
 		t.Fatalf("drop updated_at: %v", err)
+	}
+	if _, err := db.Exec(`DROP INDEX tickets_parent_id`); err != nil {
+		t.Fatalf("drop parent_id index: %v", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN parent_id`); err != nil {
+		t.Fatalf("drop parent_id: %v", err)
 	}
 	if _, err := db.Exec(`PRAGMA user_version = 0`); err != nil {
 		t.Fatalf("reset user_version: %v", err)
@@ -394,7 +400,7 @@ func TestInitDBReadsWhileAnotherConnectionWrites(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	if _, err := Add("existing ticket", "", 2, "acme"); err != nil {
+	if _, err := Add("existing ticket", "", 2, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	path := dbPath()
@@ -432,7 +438,7 @@ func TestClaimNextConcurrentlyClaimsEachTicketOnce(t *testing.T) {
 
 	const total = 8
 	for i := 0; i < total; i++ {
-		if _, err := Add("ticket", "", 2, "acme"); err != nil {
+		if _, err := Add("ticket", "", 2, "acme", nil); err != nil {
 			t.Fatalf("Add: %v", err)
 		}
 	}

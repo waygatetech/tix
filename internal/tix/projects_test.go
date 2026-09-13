@@ -18,7 +18,7 @@ func TestVariantSpellingsResolveToOneProject(t *testing.T) {
 	newProjects(t, "frontend")
 
 	for _, variant := range []string{"frontend", "Frontend", "front-end", "frontend ", "FRONT END"} {
-		if _, err := Add("ticket", "body", 2, variant); err != nil {
+		if _, err := Add("ticket", "body", 2, variant, nil); err != nil {
 			t.Fatalf("Add(project=%q): %v", variant, err)
 		}
 	}
@@ -68,13 +68,13 @@ func TestUnknownProjectIsRejectedEverywhere(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	if _, err := Add("ticket", "body", 2, "acme"); err != nil {
+	if _, err := Add("ticket", "body", 2, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	cases := map[string]error{
 		"Add": func() error {
-			_, err := Add("ticket", "body", 2, "backend")
+			_, err := Add("ticket", "body", 2, "backend", nil)
 			return err
 		}(),
 		"ListTickets": func() error {
@@ -125,7 +125,7 @@ func TestUnknownProjectIsRejectedEverywhere(t *testing.T) {
 func TestUnknownProjectErrorWithNoProjectsYet(t *testing.T) {
 	setupTestDB(t)
 
-	_, err := Add("ticket", "body", 2, "acme")
+	_, err := Add("ticket", "body", 2, "acme", nil)
 	if err == nil {
 		t.Fatal("Add into an empty database succeeded, want an unknown-project error")
 	}
@@ -411,6 +411,12 @@ func TestMigrationBackfillsProjectsAndPinnedPrefixes(t *testing.T) {
 	// old schema, not on this one with the number changed.
 	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN updated_at`); err != nil {
 		t.Fatalf("drop updated_at: %v", err)
+	}
+	if _, err := db.Exec(`DROP INDEX tickets_parent_id`); err != nil {
+		t.Fatalf("drop parent_id index: %v", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN parent_id`); err != nil {
+		t.Fatalf("drop parent_id: %v", err)
 	}
 	if _, err := db.Exec(`PRAGMA user_version = 2`); err != nil {
 		t.Fatalf("reset user_version: %v", err)

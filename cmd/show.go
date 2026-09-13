@@ -48,8 +48,30 @@ var showCmd = &cobra.Command{
 		fmt.Printf("created %s, updated %s (idle %s)\n",
 			formatTimestamp(ticket.CreatedAt), formatTimestamp(ticket.UpdatedAt),
 			tix.FormatAge(time.Since(ticket.UpdatedAt)))
+		if ticket.ParentID != nil {
+			parent, err := tix.Show(*ticket.ParentID)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("parent: %s %s\n", tix.FormatID(prefix, parent.ID), parent.Title)
+		}
 		if ticket.Body != "" {
 			fmt.Println(ticket.Body)
+		}
+
+		children, err := tix.ListTickets(tix.ListOptions{Project: ticket.Project, ShowAll: true, ParentID: &ticket.ID})
+		if err != nil {
+			return err
+		}
+		if len(children) > 0 {
+			fmt.Println("children:")
+			for _, child := range children {
+				marker := ""
+				if child.Status == "done" {
+					marker = "x "
+				}
+				fmt.Printf("  %s%s [P%d] %s\n", marker, tix.FormatID(prefix, child.ID), child.Priority, child.Title)
+			}
 		}
 		return nil
 	},

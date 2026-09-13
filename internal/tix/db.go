@@ -231,6 +231,12 @@ var migrations = []string{
 	// history from every repo.
 	`CREATE INDEX IF NOT EXISTS tickets_project_status_order
 		ON tickets(project, status, priority, order_rank);`,
+	// parent_id groups tickets under an epic: a ticket whose parent_id points
+	// at another ticket is one of that ticket's children. NULL means no
+	// parent, which is why the column carries no NOT NULL/default the way
+	// project and status do.
+	`ALTER TABLE tickets ADD COLUMN parent_id INTEGER REFERENCES tickets(id);
+	CREATE INDEX IF NOT EXISTS tickets_parent_id ON tickets(parent_id);`,
 }
 
 // migrate applies every migration the database has not seen yet. The version

@@ -141,6 +141,9 @@ func ticketDetail(t tix.Ticket) string {
 	detail := fmt.Sprintf("%s (%s, %s, updated %s)",
 		ticketLine(t.ID, t.Priority, t.Title), t.Status, t.Project,
 		t.UpdatedAt.UTC().Format(time.RFC3339))
+	if t.ParentID != nil {
+		detail += fmt.Sprintf("\nparent: %d", *t.ParentID)
+	}
 	if t.Body != "" {
 		detail += "\n" + t.Body
 	}
@@ -153,6 +156,7 @@ type addArgs struct {
 	Priority *int   `json:"priority,omitempty" jsonschema:"priority 0-5, lower is more urgent (default 2)"`
 	Project  string `json:"project" jsonschema:"the project the ticket belongs to; must be an existing project unless create is true"`
 	Create   bool   `json:"create,omitempty" jsonschema:"create the project if it does not exist yet"`
+	ParentID *int   `json:"parent_id,omitempty" jsonschema:"id of a ticket in the same project to group this one under (epic)"`
 }
 
 func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.CallToolResult, any, error) {
@@ -170,7 +174,7 @@ func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.Call
 	if err != nil {
 		return nil, nil, err
 	}
-	id, err := tix.Add(args.Title, args.Body, priority, project)
+	id, err := tix.Add(args.Title, args.Body, priority, project, args.ParentID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("add failed: %w", err)
 	}
@@ -238,7 +242,7 @@ func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) 
 	lines := make([]string, 0, len(args.Tickets))
 	for i, ticket := range args.Tickets {
 		priority := normalizePriority(ticket.Priority)
-		id, err := tix.Add(ticket.Title, ticket.Body, priority, project)
+		id, err := tix.Add(ticket.Title, ticket.Body, priority, project, nil)
 		if err != nil {
 			// Name what did land so the caller can retry the rest instead of
 			// re-sending the whole batch and duplicating tickets. The ids go in
@@ -257,6 +261,7 @@ type listArgs struct {
 	Status   string `json:"status,omitempty" jsonschema:"filter by exact status (e.g. open, in_progress, done)"`
 	Priority *int   `json:"priority,omitempty" jsonschema:"filter by exact priority"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"limit the number of tickets returned (0 = no limit)"`
+	ParentID *int   `json:"parent_id,omitempty" jsonschema:"only tickets grouped under this parent ticket id (epic)"`
 }
 
 func listTool(_ context.Context, _ *mcp.CallToolRequest, args listArgs) (*mcp.CallToolResult, any, error) {
@@ -272,6 +277,7 @@ func listTool(_ context.Context, _ *mcp.CallToolRequest, args listArgs) (*mcp.Ca
 		Status:   args.Status,
 		Priority: args.Priority,
 		Limit:    args.Limit,
+		ParentID: args.ParentID,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("list failed: %w", err)
@@ -352,21 +358,28 @@ func showTool(_ context.Context, _ *mcp.CallToolRequest, args showArgs) (*mcp.Ca
 }
 
 type editArgs struct {
-	ID       int     `json:"id" jsonschema:"the ticket id"`
-	Title    *string `json:"title,omitempty" jsonschema:"new ticket title"`
-	Body     *string `json:"body,omitempty" jsonschema:"new ticket body"`
-	Status   *string `json:"status,omitempty" jsonschema:"new ticket status (e.g. open, in_progress, done)"`
-	Priority *int    `json:"priority,omitempty" jsonschema:"new ticket priority"`
-	Project  *string `json:"project,omitempty" jsonschema:"new project name"`
+	ID          int     `json:"id" jsonschema:"the ticket id"`
+	Title       *string `json:"title,omitempty" jsonschema:"new ticket title"`
+	Body        *string `json:"body,omitempty" jsonschema:"new ticket body"`
+	Status      *string `json:"status,omitempty" jsonschema:"new ticket status (e.g. open, in_progress, done)"`
+	Priority    *int    `json:"priority,omitempty" jsonschema:"new ticket priority"`
+	Project     *string `json:"project,omitempty" jsonschema:"new project name"`
+	ParentID    *int    `json:"parent_id,omitempty" jsonschema:"id of a ticket in the same project to group this one under (epic)"`
+	ClearParent bool    `json:"clear_parent,omitempty" jsonschema:"remove this ticket's parent; conflicts with parent_id"`
 }
 
 func editTool(_ context.Context, _ *mcp.CallToolRequest, args editArgs) (*mcp.CallToolResult, any, error) {
+	if args.ParentID != nil && args.ClearParent {
+		return nil, nil, fmt.Errorf("use either parent_id or clear_parent, not both")
+	}
 	ticket, err := tix.Edit(args.ID, tix.EditOptions{
-		Title:    args.Title,
-		Body:     args.Body,
-		Status:   args.Status,
-		Priority: args.Priority,
-		Project:  args.Project,
+		Title:       args.Title,
+		Body:        args.Body,
+		Status:      args.Status,
+		Priority:    args.Priority,
+		Project:     args.Project,
+		ParentID:    args.ParentID,
+		ClearParent: args.ClearParent,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("edit failed: %w", err)

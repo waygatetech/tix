@@ -10,12 +10,14 @@ import (
 )
 
 var (
-	editTitle    string
-	editBody     string
-	editBodyFile string
-	editStatus   string
-	editPriority int
-	editProject  string
+	editTitle       string
+	editBody        string
+	editBodyFile    string
+	editStatus      string
+	editPriority    int
+	editProject     string
+	editParent      string
+	editClearParent bool
 )
 
 var editCmd = &cobra.Command{
@@ -65,6 +67,19 @@ var editCmd = &cobra.Command{
 		if cmd.Flags().Changed("project") {
 			options.Project = &editProject
 		}
+		if cmd.Flags().Changed("parent") && editClearParent {
+			return errors.New("use either --parent or --no-parent, not both")
+		}
+		if cmd.Flags().Changed("parent") {
+			parentID, err := tix.ResolveRef(editParent)
+			if err != nil {
+				return err
+			}
+			options.ParentID = &parentID
+		}
+		if editClearParent {
+			options.ClearParent = true
+		}
 
 		ticket, err := tix.Edit(id, options)
 		if err != nil {
@@ -98,6 +113,8 @@ func init() {
 	editCmd.Flags().StringVar(&editStatus, "status", "", "new ticket status")
 	editCmd.Flags().IntVarP(&editPriority, "priority", "p", 0, "new ticket priority")
 	editCmd.Flags().StringVar(&editProject, "project", "", "new project name")
+	editCmd.Flags().StringVar(&editParent, "parent", "", "parent ticket to group this one under (epic)")
+	editCmd.Flags().BoolVar(&editClearParent, "no-parent", false, "remove this ticket's parent")
 	editCmd.Flags().BoolVar(&jsonOutput, "json", false, "output ticket as JSON")
 	editCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
 	editCmd.Flags().StringVar(&fieldsOutput, "fields", "", "comma-separated JSON fields to include")
