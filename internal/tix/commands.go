@@ -16,6 +16,10 @@ type Ticket struct {
 	Status   string `json:"status"`
 	Priority int    `json:"priority"`
 	Project  string `json:"project"`
+	// Order is the internal rank used to order tickets within a priority. It is
+	// hidden from normal JSON output, but the CLI can expose it when a caller
+	// explicitly asks for --fields order.
+	Order int `json:"-"`
 	// ParentID groups this ticket under an epic: the id of another ticket in
 	// the same project, or nil when this ticket has no parent.
 	ParentID *int `json:"parent_id,omitempty"`
@@ -28,7 +32,7 @@ type Ticket struct {
 // ticketColumns is the select list every ticket read shares, paired with
 // scanTicket below: a column added to one and not the other is a scan error at
 // runtime, so they are kept next to each other.
-const ticketColumns = `id, title, body, status, priority, project, parent_id, created_at, updated_at`
+const ticketColumns = `id, title, body, status, priority, order_rank, project, parent_id, created_at, updated_at`
 
 // scanTicket reads one row of ticketColumns. It takes the Scan method rather
 // than a row type so both *sql.Row and *sql.Rows can be handed to it.
@@ -36,7 +40,7 @@ func scanTicket(scan func(...any) error) (Ticket, error) {
 	var ticket Ticket
 	var parentID sql.NullInt64
 	err := scan(&ticket.ID, &ticket.Title, &ticket.Body, &ticket.Status,
-		&ticket.Priority, &ticket.Project, &parentID, &ticket.CreatedAt, &ticket.UpdatedAt)
+		&ticket.Priority, &ticket.Order, &ticket.Project, &parentID, &ticket.CreatedAt, &ticket.UpdatedAt)
 	if parentID.Valid {
 		id := int(parentID.Int64)
 		ticket.ParentID = &id

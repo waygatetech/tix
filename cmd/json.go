@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/waygatetech/tix/internal/tix"
 )
 
 var fieldsOutput string
@@ -52,6 +54,7 @@ func filterJSONFields(value any, fields string) (any, error) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return nil, fmt.Errorf("json failed: %w", err)
 	}
+	addExplicitFields(decoded, value, wanted)
 
 	switch typed := decoded.(type) {
 	case map[string]any:
@@ -72,6 +75,32 @@ func filterJSONFields(value any, fields string) (any, error) {
 		return filtered, nil
 	default:
 		return nil, fmt.Errorf("--fields requires object JSON output")
+	}
+}
+
+func addExplicitFields(decoded, original any, wanted map[string]bool) {
+	if !wanted["order"] {
+		return
+	}
+
+	switch value := original.(type) {
+	case tix.Ticket:
+		if m, ok := decoded.(map[string]any); ok {
+			m["order"] = value.Order
+		}
+	case []tix.Ticket:
+		items, ok := decoded.([]any)
+		if !ok {
+			return
+		}
+		for i, ticket := range value {
+			if i >= len(items) {
+				return
+			}
+			if m, ok := items[i].(map[string]any); ok {
+				m["order"] = ticket.Order
+			}
+		}
 	}
 }
 

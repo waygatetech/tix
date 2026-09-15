@@ -114,6 +114,7 @@ check "list filters by status" '"status":"open"' "$tmp/tix" list --project acme 
 check "list filters by priority" '"priority":0' "$tmp/tix" list --project acme --priority 0 --json --compact
 check "list limits results" '[{"id":2,' "$tmp/tix" list --project acme --limit 1 --json --compact
 check "list supports JSON field selection" '[{"id":2,"title":"write docs"}' "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,title
+check "list exposes order when requested" '[{"id":2,"order":2}' "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,order
 
 # search is the duplicate check: it looks in the body as well as the title, so
 # a ticket whose subject only appears in its description still turns up
@@ -226,6 +227,8 @@ check "next supports JSON field selection" '{"id":2,"title":"write docs"}' "$tmp
 check "show displays full ticket details" "README" "$tmp/tix" show 2
 check "show supports compact JSON output" '{"id":2,' "$tmp/tix" show 2 --json --compact
 check "show supports JSON field selection" '{"id":2,"status":"open"}' "$tmp/tix" show 2 --json --compact --fields id,status
+check_absent "show hides order by default" '"order"' "$tmp/tix" show 2 --json --compact
+check "show exposes order when requested" '{"id":2,"order":2}' "$tmp/tix" show 2 --json --compact --fields id,order
 check "claim-next marks ticket in progress" '"status":"in_progress"' "$tmp/tix" claim-next --project zen --json --compact
 check "claim-next removes claimed ticket from next" "no open tickets" "$tmp/tix" next --project zen
 

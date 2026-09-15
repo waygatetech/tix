@@ -81,6 +81,7 @@ func stripTimestamps(t *testing.T, tickets []Ticket) []Ticket {
 		}
 		ticket.CreatedAt = time.Time{}
 		ticket.UpdatedAt = time.Time{}
+		ticket.Order = 0
 		stripped[i] = ticket
 	}
 	return stripped
@@ -681,6 +682,13 @@ func TestReorderChangesSequenceWithinPriority(t *testing.T) {
 	want := []string{"ac-3 [P1] third", "ac-1 [P1] first", "ac-2 [P1] second"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("listLines(acme, false) after Reorder = %#v, want %#v", got, want)
+	}
+	ticket, err := Show(int(thirdID))
+	if err != nil {
+		t.Fatalf("Show reordered ticket: %v", err)
+	}
+	if ticket.Order == 0 {
+		t.Fatalf("Order = 0 after Reorder, want internal order populated")
 	}
 
 	if err := Reorder([]int{99999}); err == nil {
