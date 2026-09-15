@@ -433,6 +433,36 @@ func TestWritesMoveUpdatedAt(t *testing.T) {
 	}
 }
 
+func TestEditStoresStructuredBody(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	id, err := Add("avatar dropdown", "old body", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	body := "## Problem\n\n" +
+		"The avatar dropdown menu is implemented differently on admin dashboard pages and attendee-facing pages.\n\n" +
+		"## Scope\n\n" +
+		"Consolidate the avatar dropdown into one shared component used by `templates/layout.html` and `templates/admin/layout.html`.\n"
+	ticket, err := Edit(int(id), EditOptions{Body: &body})
+	if err != nil {
+		t.Fatalf("Edit body: %v", err)
+	}
+	if ticket.Body != body {
+		t.Fatalf("body = %q, want %q", ticket.Body, body)
+	}
+
+	shown, err := Show(int(id))
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	if shown.Body != body {
+		t.Fatalf("stored body = %q, want %q", shown.Body, body)
+	}
+}
+
 // An edit that sets no fields is rejected, and must not count as a write: a
 // failed call should not make an abandoned ticket look freshly worked on.
 func TestEmptyEditLeavesUpdatedAtAlone(t *testing.T) {

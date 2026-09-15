@@ -85,6 +85,8 @@ check "add high-priority ticket" "ac-2 [P0] write docs" "$tmp/tix" add --project
 check "add ticket in a second project" "ze-3 [P2] refactor parser" "$tmp/tix" add --project zen "refactor parser" -b "split tokens" --create
 printf "generated body from a file" >"$tmp/body.txt"
 check "add reads body from file" "fi-4 [P1] file-backed ticket" "$tmp/tix" add --project files "file-backed ticket" --body-file "$tmp/body.txt" -p 1 --create
+printf '## Problem\n\nrestore probe via file\n\n## Scope\n\nuse `templates/layout.html`\n' >"$tmp/edit-body.md"
+check "edit reads body from file" "restore probe via file" "$tmp/tix" edit 4 --body-file "$tmp/edit-body.md" --json
 
 # an unknown project is the error that stops a typo from forking the backlog
 check "add rejects an unknown project" 'unknown project "acmee"' "$tmp/tix" add --project acmee "typo ticket" -b body

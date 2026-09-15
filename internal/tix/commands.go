@@ -164,7 +164,7 @@ func nullableInt(v *int) any {
 func Bump(id, priority int) (int, int, error) {
 	res, err := db.Exec(`UPDATE tickets SET priority = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, priority, id)
 	if err != nil {
-		return 0, 0, errors.New("update failed")
+		return 0, 0, fmt.Errorf("update failed: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
@@ -200,7 +200,7 @@ func Reorder(ids []int) error {
 			maxRank+i+1, id,
 		)
 		if err != nil {
-			return errors.New("update failed")
+			return fmt.Errorf("update failed: %w", err)
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
@@ -214,7 +214,7 @@ func Reorder(ids []int) error {
 func Done(id int) error {
 	res, err := db.Exec(`UPDATE tickets SET status = 'done', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
 	if err != nil {
-		return errors.New("update failed")
+		return fmt.Errorf("update failed: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
@@ -607,7 +607,7 @@ func Edit(id int, options EditOptions) (Ticket, error) {
 	query := `UPDATE tickets SET ` + strings.Join(sets, `, `) + ` WHERE id = ?`
 	res, err := db.Exec(query, args...)
 	if err != nil {
-		return Ticket{}, errors.New("update failed")
+		return Ticket{}, fmt.Errorf("update failed: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
