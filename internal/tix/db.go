@@ -237,6 +237,16 @@ var migrations = []string{
 	// project and status do.
 	`ALTER TABLE tickets ADD COLUMN parent_id INTEGER REFERENCES tickets(id);
 	CREATE INDEX IF NOT EXISTS tickets_parent_id ON tickets(parent_id);`,
+	// ticket_dependencies records prerequisites between tickets in the same
+	// project: ticket_id is blocked until depends_on_id is done.
+	`CREATE TABLE IF NOT EXISTS ticket_dependencies (
+		ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+		depends_on_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (ticket_id, depends_on_id)
+	);
+	CREATE INDEX IF NOT EXISTS ticket_dependencies_depends_on
+		ON ticket_dependencies(depends_on_id, ticket_id);`,
 }
 
 // migrate applies every migration the database has not seen yet. The version

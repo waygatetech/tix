@@ -55,6 +55,20 @@ var showCmd = &cobra.Command{
 			}
 			fmt.Printf("parent: %s %s\n", tix.FormatID(prefix, parent.ID), parent.Title)
 		}
+		if len(ticket.DependsOnIDs) > 0 {
+			fmt.Println("depends on:")
+			for _, depID := range ticket.DependsOnIDs {
+				dep, err := tix.Show(depID)
+				if err != nil {
+					return err
+				}
+				marker := ""
+				if dep.Status == "done" {
+					marker = "x "
+				}
+				fmt.Printf("  %s%s [P%d] %s\n", marker, tix.FormatID(prefix, dep.ID), dep.Priority, dep.Title)
+			}
+		}
 		if ticket.Body != "" {
 			fmt.Println(ticket.Body)
 		}

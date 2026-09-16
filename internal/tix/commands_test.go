@@ -380,6 +380,9 @@ func TestShowReturnsTicketByID(t *testing.T) {
 	if _, err := Show(99); err == nil || !strings.Contains(err.Error(), "no such ticket: 99") {
 		t.Fatalf("Show missing ticket error = %v, want no such ticket: 99", err)
 	}
+	if _, err := Show(99); err == nil || !strings.Contains(err.Error(), dbPath()) {
+		t.Fatalf("Show missing ticket error = %v, want it to name %s", err, dbPath())
+	}
 }
 
 // The point of updated_at is that a write moves it: a ticket whose last write
@@ -630,6 +633,146 @@ func TestClaimNextMarksTicketInProgress(t *testing.T) {
 	}
 }
 
+func TestDependenciesBlockQueueAndUnblockWhenDone(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	aID, err := Add("A", "body", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add(A): %v", err)
+	}
+	a := int(aID)
+	bID, err := Add("B", "body", 0, "acme", nil, a)
+	if err != nil {
+		t.Fatalf("Add(B): %v", err)
+	}
+	cID, err := Add("C", "body", 1, "acme", nil, a)
+	if err != nil {
+		t.Fatalf("Add(C): %v", err)
+	}
+	c := int(cID)
+	dID, err := Add("D", "body", 0, "acme", nil, c)
+	if err != nil {
+		t.Fatalf("Add(D): %v", err)
+	}
+
+	for _, id := range []int{int(bID), int(cID), int(dID)} {
+		ticket, err := Show(id)
+		if err != nil {
+			t.Fatalf("Show(%d): %v", id, err)
+		}
+		if ticket.Status != "blocked" {
+			t.Fatalf("ticket %d status = %q, want blocked", id, ticket.Status)
+		}
+		if len(ticket.BlockedByIDs) != 1 {
+			t.Fatalf("ticket %d blocked_by = %v, want one blocker", id, ticket.BlockedByIDs)
+		}
+	}
+
+	next, err := NextTicket("acme")
+	if err != nil {
+		t.Fatalf("NextTicket(acme): %v", err)
+	}
+	if next.ID != a {
+		t.Fatalf("NextTicket(acme) = %d, want A (%d)", next.ID, a)
+	}
+
+	if err := Done(a); err != nil {
+		t.Fatalf("Done(A): %v", err)
+	}
+
+	b, err := Show(int(bID))
+	if err != nil {
+		t.Fatalf("Show(B): %v", err)
+	}
+	if b.Status != "open" || len(b.BlockedByIDs) != 0 {
+		t.Fatalf("B after Done(A) = status %q blocked_by %v, want open and unblocked", b.Status, b.BlockedByIDs)
+	}
+	cTicket, err := Show(c)
+	if err != nil {
+		t.Fatalf("Show(C): %v", err)
+	}
+	if cTicket.Status != "open" || len(cTicket.BlockedByIDs) != 0 {
+		t.Fatalf("C after Done(A) = status %q blocked_by %v, want open and unblocked", cTicket.Status, cTicket.BlockedByIDs)
+	}
+	d, err := Show(int(dID))
+	if err != nil {
+		t.Fatalf("Show(D): %v", err)
+	}
+	if d.Status != "blocked" || !reflect.DeepEqual(d.BlockedByIDs, []int{c}) {
+		t.Fatalf("D after Done(A) = status %q blocked_by %v, want blocked by C", d.Status, d.BlockedByIDs)
+	}
+}
+
+func TestOpenTicketWithUnfinishedDependencyIsSkipped(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	blockerID, err := Add("blocker", "body", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add(blocker): %v", err)
+	}
+	blocker := int(blockerID)
+	if _, err := Add("blocked", "body", 0, "acme", nil, blocker); err != nil {
+		t.Fatalf("Add(blocked): %v", err)
+	}
+	open := "open"
+	if _, err := Edit(2, EditOptions{Status: &open}); err != nil {
+		t.Fatalf("Edit(blocked open): %v", err)
+	}
+
+	next, err := ClaimNext("acme")
+	if err != nil {
+		t.Fatalf("ClaimNext(acme): %v", err)
+	}
+	if next.ID != blocker {
+		t.Fatalf("ClaimNext(acme) = %d, want blocker %d", next.ID, blocker)
+	}
+}
+
+func TestEditSetsClearsAndRejectsDependencyCycles(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme", "zen")
+
+	firstID, err := Add("first", "body", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add(first): %v", err)
+	}
+	secondID, err := Add("second", "body", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add(second): %v", err)
+	}
+	otherID, err := Add("other", "body", 2, "zen", nil)
+	if err != nil {
+		t.Fatalf("Add(other): %v", err)
+	}
+
+	first := int(firstID)
+	deps := []int{first}
+	second, err := Edit(int(secondID), EditOptions{DependsOnIDs: &deps})
+	if err != nil {
+		t.Fatalf("Edit(set dependencies): %v", err)
+	}
+	if second.Status != "blocked" || !reflect.DeepEqual(second.DependsOnIDs, []int{first}) {
+		t.Fatalf("second after dependency edit = %#v, want blocked depending on first", second)
+	}
+
+	if _, err := Edit(first, EditOptions{DependsOnIDs: &[]int{int(secondID)}}); err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("Edit(cyclic dependency) error = %v, want cycle", err)
+	}
+	if _, err := Edit(int(secondID), EditOptions{DependsOnIDs: &[]int{int(otherID)}}); err == nil || !strings.Contains(err.Error(), "belongs to project") {
+		t.Fatalf("Edit(cross-project dependency) error = %v, want project mismatch", err)
+	}
+
+	second, err = Edit(int(secondID), EditOptions{ClearDependencies: true})
+	if err != nil {
+		t.Fatalf("Edit(clear dependencies): %v", err)
+	}
+	if second.Status != "open" || len(second.DependsOnIDs) != 0 || len(second.BlockedByIDs) != 0 {
+		t.Fatalf("second after clear = %#v, want open with no dependencies", second)
+	}
+}
+
 func TestBumpChangesPriorityAndOrdering(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
@@ -693,6 +836,56 @@ func TestReorderChangesSequenceWithinPriority(t *testing.T) {
 
 	if err := Reorder([]int{99999}); err == nil {
 		t.Fatal("Reorder with unknown id: want error, got nil")
+	}
+}
+
+func TestReorderRejectsDuplicatesWithoutChangingSequence(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	firstID, err := Add("first", "body", 1, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add first ticket: %v", err)
+	}
+	secondID, err := Add("second", "body", 1, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add second ticket: %v", err)
+	}
+
+	err = Reorder([]int{int(secondID), int(firstID), int(firstID)})
+	if err == nil || !strings.Contains(err.Error(), "duplicate ticket") {
+		t.Fatalf("Reorder duplicate error = %v, want duplicate ticket", err)
+	}
+
+	got := listLines(t, "acme", false)
+	want := []string{"ac-1 [P1] first", "ac-2 [P1] second"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("listLines(acme, false) after duplicate Reorder = %#v, want %#v", got, want)
+	}
+}
+
+func TestReorderRejectsMissingTicketWithoutChangingSequence(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	firstID, err := Add("first", "body", 1, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add first ticket: %v", err)
+	}
+	secondID, err := Add("second", "body", 1, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add second ticket: %v", err)
+	}
+
+	err = Reorder([]int{int(secondID), 99999, int(firstID)})
+	if err == nil || !strings.Contains(err.Error(), "no such ticket: 99999") {
+		t.Fatalf("Reorder missing error = %v, want no such ticket", err)
+	}
+
+	got := listLines(t, "acme", false)
+	want := []string{"ac-1 [P1] first", "ac-2 [P1] second"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("listLines(acme, false) after missing Reorder = %#v, want %#v", got, want)
 	}
 }
 

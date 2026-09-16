@@ -83,7 +83,7 @@ tix stale --project acme
 
 ## Commands
 
-- `tix add [title] --project NAME (--body TEXT | --body-file PATH) [--priority N] [--create]` — add a ticket. Priority defaults to `2`; lower numbers are higher priority (`P0` is most urgent). `--create` makes the project when it does not exist yet.
+- `tix add [title] --project NAME (--body TEXT | --body-file PATH) [--priority N] [--depends-on ID] [--create]` — add a ticket. Priority defaults to `2`; lower numbers are higher priority (`P0` is most urgent). Repeat or comma-separate `--depends-on` to block the new ticket on other tickets. `--create` makes the project when it does not exist yet.
 - `tix list --project NAME [--all] [--status STATUS] [--priority N] [--limit N] [--json] [--compact] [--fields FIELDS]` — list tickets for a project. Done tickets are hidden unless `--all` is set.
 - `tix search TERM --project NAME [--status STATUS] [--priority N] [--limit N] [--json] [--compact] [--fields FIELDS]` — find a project's tickets whose title or body contains `TERM`. Matching ignores case and is a plain substring match, so `%` and `_` are searched for literally. Every status is searched, done included — work that already shipped is as much a duplicate as an open ticket — so narrow with `--status open` when only the live backlog matters.
 - `tix next --project NAME [--json] [--compact] [--fields FIELDS]` — show the highest-priority open ticket for a project.
@@ -94,6 +94,7 @@ tix stale --project acme
 - `tix projects add NAME [--key PREFIX] [--repo-path PATH]` — create a project. `--key` pins its ticket ID prefix; `--repo-path` records where its code lives.
 - `tix projects set-repo-path NAME [PATH]` — record where an existing project's code lives, so commands run there can skip `--project`. `PATH` defaults to the current directory.
 - `tix bump [id] [priority] [--project NAME]` — change a ticket's priority.
+- `tix edit [id] [--depends-on ID] [--no-dependencies] ...` — edit a ticket. `--depends-on` replaces the ticket's dependency set; repeat or comma-separate it for multiple dependencies.
 - `tix done [id] [--project NAME]` — mark a ticket done.
 - `tix rm [id] --project NAME` — remove a ticket from a project.
 - `tix prefix [project] [prefix]` — show ticket ID prefixes, or pin one for a project.
@@ -104,6 +105,18 @@ tix stale --project acme
 - `tix init-agent PROJECT [--db PATH]` — append idempotent `tix` workflow guidance to `AGENTS.md` and `CLAUDE.md` at the current Git repository root (or the current directory), so coding agents know how to use `tix` in this repo.
 
 Priorities sort ascending, so `P0` appears before `P2`. Tickets with the same priority keep insertion order.
+
+### Dependencies
+
+A ticket can depend on other tickets in the same project:
+
+```sh
+tix add "B" --project acme -b "blocked until A ships" --depends-on ac-1
+tix edit ac-4 --depends-on ac-3 --depends-on ac-7
+tix edit ac-4 --no-dependencies
+```
+
+Tickets with unfinished dependencies are marked `blocked`, and `next`/`claim-next` skip them even if an agent manually sets their status back to `open`. When a dependency is marked done, tickets that were blocked only by that dependency chain are automatically moved back to `open`; an agent can still mark one `blocked` again for any non-dependency reason.
 
 ### Projects
 

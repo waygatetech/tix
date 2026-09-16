@@ -23,6 +23,10 @@ type Ticket struct {
 	// ParentID groups this ticket under an epic: the id of another ticket in
 	// the same project, or nil when this ticket has no parent.
 	ParentID *int `json:"parent_id,omitempty"`
+	// DependsOnIDs are tickets that must be done before this ticket is ready.
+	DependsOnIDs []int `json:"depends_on,omitempty"`
+	// BlockedByIDs is the unfinished subset of DependsOnIDs.
+	BlockedByIDs []int `json:"blocked_by,omitempty"`
 	// CreatedAt and UpdatedAt are stored UTC, and UpdatedAt moves on every
 	// write, so how long a ticket has sat in its current status is answerable.
 	CreatedAt time.Time `json:"created_at"`
@@ -72,7 +76,7 @@ type ListOptions struct {
 	ParentID *int
 }
 
-func Add(title, body string, priority int, project string, parentID *int) (int64, error) {
+func Add(title, body string, priority int, project string, parentID *int, dependsOnIDs ...int) (int64, error) {
 	project, err := ResolveProject(project)
 	if err != nil {
 		return 0, err
@@ -82,20 +86,45 @@ func Add(title, body string, priority int, project string, parentID *int) (int64
 			return 0, err
 		}
 	}
+	if err := checkDependencies(0, project, dependsOnIDs); err != nil {
+		return 0, err
+	}
+	status := "open"
+	if blocked, err := hasUnfinishedDependencies(dependsOnIDs); err != nil {
+		return 0, err
+	} else if blocked {
+		status = "blocked"
+	}
 
 	var maxRank int
 	db.QueryRow(`SELECT COALESCE(MAX(order_rank), 0) FROM tickets`).Scan(&maxRank)
 
-	res, err := db.Exec(
-		`INSERT INTO tickets (title, body, priority, order_rank, project, parent_id, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-		title, body, priority, maxRank+1, project, nullableInt(parentID),
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(
+		`INSERT INTO tickets (title, body, status, priority, order_rank, project, parent_id, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		title, body, status, priority, maxRank+1, project, nullableInt(parentID),
 	)
 	if err != nil {
 		return 0, err
 	}
 	id, _ := res.LastInsertId()
+	if err := replaceDependencies(tx, int(id), dependsOnIDs); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
 	return id, nil
+}
+
+func noSuchTicket(id any) error {
+	return fmt.Errorf("no such ticket: %v (database: %s)", id, DBPath())
 }
 
 // checkParent reports whether id can be used as a parent for a ticket in
@@ -105,7 +134,7 @@ func Add(title, body string, priority int, project string, parentID *int) (int64
 func checkParent(id int, project string) error {
 	var parentProject string
 	if err := db.QueryRow(`SELECT project FROM tickets WHERE id = ?`, id).Scan(&parentProject); err != nil {
-		return fmt.Errorf("no such ticket: %d", id)
+		return noSuchTicket(id)
 	}
 	if parentProject != project {
 		return fmt.Errorf("parent ticket %d belongs to project %q, not %q", id, parentProject, project)
@@ -156,6 +185,105 @@ func descendsFromDepth(candidate, id, depth int) (bool, error) {
 	return false, nil
 }
 
+func checkDependencies(id int, project string, dependsOnIDs []int) error {
+	seen := map[int]bool{}
+	for _, depID := range dependsOnIDs {
+		if depID == id && id != 0 {
+			return errors.New("a ticket cannot depend on itself")
+		}
+		if seen[depID] {
+			return fmt.Errorf("duplicate dependency: %d", depID)
+		}
+		seen[depID] = true
+
+		var depProject string
+		if err := db.QueryRow(`SELECT project FROM tickets WHERE id = ?`, depID).Scan(&depProject); err != nil {
+			return noSuchTicket(depID)
+		}
+		if depProject != project {
+			return fmt.Errorf("dependency ticket %d belongs to project %q, not %q", depID, depProject, project)
+		}
+		if id != 0 {
+			if cyclic, err := dependsOn(depID, id); err != nil {
+				return err
+			} else if cyclic {
+				return fmt.Errorf("depending on %d would create a cycle", depID)
+			}
+		}
+	}
+	return nil
+}
+
+func dependsOn(ticketID, targetID int) (bool, error) {
+	return dependsOnDepth(ticketID, targetID, 0)
+}
+
+func dependsOnDepth(ticketID, targetID, depth int) (bool, error) {
+	if ticketID == targetID {
+		return true, nil
+	}
+	if depth > 1000 {
+		return false, fmt.Errorf("ticket %d's dependency chain is too deep to check", ticketID)
+	}
+	rows, err := db.Query(`SELECT depends_on_id FROM ticket_dependencies WHERE ticket_id = ?`, ticketID)
+	if err != nil {
+		return false, err
+	}
+	var dependencies []int
+	for rows.Next() {
+		var depID int
+		if err := rows.Scan(&depID); err != nil {
+			rows.Close()
+			return false, err
+		}
+		dependencies = append(dependencies, depID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	for _, depID := range dependencies {
+		if ok, err := dependsOnDepth(depID, targetID, depth+1); err != nil {
+			return false, err
+		} else if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func hasUnfinishedDependencies(dependsOnIDs []int) (bool, error) {
+	for _, depID := range dependsOnIDs {
+		var status string
+		if err := db.QueryRow(`SELECT status FROM tickets WHERE id = ?`, depID).Scan(&status); err != nil {
+			return false, noSuchTicket(depID)
+		}
+		if status != "done" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+type sqlExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func replaceDependencies(exec sqlExecer, id int, dependsOnIDs []int) error {
+	if _, err := exec.Exec(`DELETE FROM ticket_dependencies WHERE ticket_id = ?`, id); err != nil {
+		return err
+	}
+	for _, depID := range dependsOnIDs {
+		if _, err := exec.Exec(
+			`INSERT INTO ticket_dependencies (ticket_id, depends_on_id) VALUES (?, ?)`,
+			id, depID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // nullableInt turns a possibly-nil *int into the value database/sql sends for
 // a NULL column.
 func nullableInt(v *int) any {
@@ -172,7 +300,7 @@ func Bump(id, priority int) (int, int, error) {
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return 0, 0, fmt.Errorf("no such ticket: %d", id)
+		return 0, 0, noSuchTicket(id)
 	}
 	return id, priority, nil
 }
@@ -186,45 +314,77 @@ func Reorder(ids []int) error {
 	if len(ids) == 0 {
 		return errors.New("no tickets given")
 	}
+	seen := map[int]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			return fmt.Errorf("duplicate ticket: %d", id)
+		}
+		seen[id] = true
+	}
 
+	values := make([]string, 0, len(ids))
+	args := make([]any, 0, len(ids)*2+1)
+	for i, id := range ids {
+		values = append(values, `(?, ?)`)
+		args = append(args, id, i+1)
+	}
+	args = append(args, len(ids))
+
+	query := `WITH input(id, seq) AS (VALUES ` + strings.Join(values, `, `) + `),
+		base(rank) AS (SELECT COALESCE(MAX(order_rank), 0) FROM tickets),
+		matched(count) AS (SELECT COUNT(*) FROM tickets WHERE id IN (SELECT id FROM input))
+	UPDATE tickets
+	SET order_rank = (SELECT rank FROM base) + (SELECT seq FROM input WHERE input.id = tickets.id),
+		updated_at = CURRENT_TIMESTAMP
+	WHERE id IN (SELECT id FROM input)
+		AND (SELECT count FROM matched) = ?`
+	res, err := db.Exec(query, args...)
+	if err != nil {
+		return fmt.Errorf("update failed: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == int64(len(ids)) {
+		return nil
+	}
+	for _, id := range ids {
+		var exists int
+		if err := db.QueryRow(`SELECT 1 FROM tickets WHERE id = ?`, id).Scan(&exists); err != nil {
+			return noSuchTicket(id)
+		}
+	}
+	return fmt.Errorf("reorder changed %d tickets, want %d", n, len(ids))
+}
+
+func Done(id int) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	var maxRank int
-	if err := tx.QueryRow(`SELECT COALESCE(MAX(order_rank), 0) FROM tickets`).Scan(&maxRank); err != nil {
-		return err
-	}
-
-	for i, id := range ids {
-		res, err := tx.Exec(
-			`UPDATE tickets SET order_rank = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-			maxRank+i+1, id,
-		)
-		if err != nil {
-			return fmt.Errorf("update failed: %w", err)
-		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			return fmt.Errorf("no such ticket: %d", id)
-		}
-	}
-
-	return tx.Commit()
-}
-
-func Done(id int) error {
-	res, err := db.Exec(`UPDATE tickets SET status = 'done', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
+	res, err := tx.Exec(`UPDATE tickets SET status = 'done', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("update failed: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("no such ticket: %d", id)
+		return noSuchTicket(id)
 	}
-	return nil
+	if _, err := tx.Exec(`
+		UPDATE tickets
+		SET status = 'open', updated_at = CURRENT_TIMESTAMP
+		WHERE status = 'blocked'
+			AND id IN (SELECT ticket_id FROM ticket_dependencies WHERE depends_on_id = ?)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM ticket_dependencies td
+				JOIN tickets dep ON dep.id = td.depends_on_id
+				WHERE td.ticket_id = tickets.id
+					AND dep.status != 'done'
+			)`, id); err != nil {
+		return fmt.Errorf("unblock dependents failed: %w", err)
+	}
+	return tx.Commit()
 }
 
 func ListTickets(options ListOptions) ([]Ticket, error) {
@@ -282,7 +442,53 @@ func queryTickets(query string, args ...any) ([]Ticket, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	if err := hydrateDependencies(tickets); err != nil {
+		return nil, err
+	}
 	return tickets, nil
+}
+
+func hydrateDependencies(tickets []Ticket) error {
+	for i := range tickets {
+		dependsOn, blockedBy, err := dependenciesFor(tickets[i].ID)
+		if err != nil {
+			return err
+		}
+		tickets[i].DependsOnIDs = dependsOn
+		tickets[i].BlockedByIDs = blockedBy
+	}
+	return nil
+}
+
+func dependenciesFor(id int) ([]int, []int, error) {
+	rows, err := db.Query(`
+		SELECT dep.id, dep.status
+		FROM ticket_dependencies td
+		JOIN tickets dep ON dep.id = td.depends_on_id
+		WHERE td.ticket_id = ?
+		ORDER BY dep.id ASC`, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	var dependsOn []int
+	var blockedBy []int
+	for rows.Next() {
+		var depID int
+		var status string
+		if err := rows.Scan(&depID, &status); err != nil {
+			return nil, nil, err
+		}
+		dependsOn = append(dependsOn, depID)
+		if status != "done" {
+			blockedBy = append(blockedBy, depID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return dependsOn, blockedBy, nil
 }
 
 // likeEscaper neutralizes the wildcards a search term may contain, so looking
@@ -387,12 +593,25 @@ func NextTicket(project string) (Ticket, error) {
 		`SELECT `+ticketColumns+` FROM tickets
 			 WHERE status = 'open'
 			 AND project = ?
+			 AND NOT EXISTS (
+				SELECT 1
+				FROM ticket_dependencies td
+				JOIN tickets dep ON dep.id = td.depends_on_id
+				WHERE td.ticket_id = tickets.id
+					AND dep.status != 'done'
+			 )
 			 ORDER BY priority ASC, order_rank ASC LIMIT 1`,
 		project,
 	).Scan)
 	if err != nil {
 		return Ticket{}, errors.New("no open tickets")
 	}
+	dependsOn, blockedBy, err := dependenciesFor(ticket.ID)
+	if err != nil {
+		return Ticket{}, err
+	}
+	ticket.DependsOnIDs = dependsOn
+	ticket.BlockedByIDs = blockedBy
 	return ticket, nil
 }
 
@@ -413,6 +632,13 @@ func ClaimNext(project string) (Ticket, error) {
 		`SELECT id FROM tickets
 			 WHERE status = 'open'
 			 AND project = ?
+			 AND NOT EXISTS (
+				SELECT 1
+				FROM ticket_dependencies td
+				JOIN tickets dep ON dep.id = td.depends_on_id
+				WHERE td.ticket_id = tickets.id
+					AND dep.status != 'done'
+			 )
 			 ORDER BY priority ASC, order_rank ASC LIMIT 1`,
 		project,
 	).Scan(&id)
@@ -440,6 +666,12 @@ func ClaimNext(project string) (Ticket, error) {
 	if err := tx.Commit(); err != nil {
 		return Ticket{}, err
 	}
+	dependsOn, blockedBy, err := dependenciesFor(ticket.ID)
+	if err != nil {
+		return Ticket{}, err
+	}
+	ticket.DependsOnIDs = dependsOn
+	ticket.BlockedByIDs = blockedBy
 	return ticket, nil
 }
 
@@ -447,8 +679,14 @@ func Show(id int) (Ticket, error) {
 	ticket, err := scanTicket(db.QueryRow(
 		`SELECT `+ticketColumns+` FROM tickets WHERE id = ?`, id).Scan)
 	if err != nil {
-		return Ticket{}, fmt.Errorf("no such ticket: %d", id)
+		return Ticket{}, noSuchTicket(id)
 	}
+	dependsOn, blockedBy, err := dependenciesFor(ticket.ID)
+	if err != nil {
+		return Ticket{}, err
+	}
+	ticket.DependsOnIDs = dependsOn
+	ticket.BlockedByIDs = blockedBy
 	return ticket, nil
 }
 
@@ -539,8 +777,10 @@ type EditOptions struct {
 	// ParentID sets the ticket's parent when non-nil; ClearParent removes it
 	// regardless of ParentID. Both unset leaves the parent untouched, the way
 	// a nil field leaves any other column untouched.
-	ParentID    *int
-	ClearParent bool
+	ParentID          *int
+	ClearParent       bool
+	DependsOnIDs      *[]int
+	ClearDependencies bool
 }
 
 func Edit(id int, options EditOptions) (Ticket, error) {
@@ -600,22 +840,70 @@ func Edit(id int, options EditOptions) (Ticket, error) {
 		sets = append(sets, `parent_id = ?`)
 		args = append(args, *options.ParentID)
 	}
-	if len(sets) == 0 {
+	dependencyEdit := options.DependsOnIDs != nil || options.ClearDependencies
+	if len(sets) == 0 && !dependencyEdit {
 		return Ticket{}, errors.New("no fields to update")
+	}
+	if dependencyEdit {
+		if options.DependsOnIDs != nil && options.ClearDependencies {
+			return Ticket{}, errors.New("use either dependencies or clear dependencies, not both")
+		}
+		current, err := Show(id)
+		if err != nil {
+			return Ticket{}, err
+		}
+		project := newProject
+		if project == "" {
+			project = current.Project
+		}
+		dependencies := []int{}
+		if options.DependsOnIDs != nil {
+			dependencies = *options.DependsOnIDs
+		}
+		if err := checkDependencies(id, project, dependencies); err != nil {
+			return Ticket{}, err
+		}
+		if blocked, err := hasUnfinishedDependencies(dependencies); err != nil {
+			return Ticket{}, err
+		} else if blocked && options.Status == nil {
+			sets = append(sets, `status = 'blocked'`)
+		} else if !blocked && options.Status == nil && current.Status == "blocked" {
+			sets = append(sets, `status = 'open'`)
+		}
 	}
 	// Appended after the empty check so an edit that changes nothing does not
 	// make the ticket look freshly worked on.
 	sets = append(sets, `updated_at = CURRENT_TIMESTAMP`)
 
-	args = append(args, id)
-	query := `UPDATE tickets SET ` + strings.Join(sets, `, `) + ` WHERE id = ?`
-	res, err := db.Exec(query, args...)
+	tx, err := db.Begin()
 	if err != nil {
-		return Ticket{}, fmt.Errorf("update failed: %w", err)
+		return Ticket{}, err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return Ticket{}, fmt.Errorf("no such ticket: %d", id)
+	defer tx.Rollback()
+
+	args = append(args, id)
+	if len(sets) > 0 {
+		query := `UPDATE tickets SET ` + strings.Join(sets, `, `) + ` WHERE id = ?`
+		res, err := tx.Exec(query, args...)
+		if err != nil {
+			return Ticket{}, fmt.Errorf("update failed: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return Ticket{}, noSuchTicket(id)
+		}
+	}
+	if dependencyEdit {
+		dependencies := []int{}
+		if options.DependsOnIDs != nil {
+			dependencies = *options.DependsOnIDs
+		}
+		if err := replaceDependencies(tx, id, dependencies); err != nil {
+			return Ticket{}, fmt.Errorf("update dependencies failed: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Ticket{}, err
 	}
 
 	return Show(id)
@@ -626,13 +914,22 @@ func Remove(id int, project string) error {
 	if err != nil {
 		return err
 	}
-	res, err := db.Exec(`DELETE FROM tickets WHERE id = ? AND project = ?`, id, project)
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM ticket_dependencies WHERE ticket_id = ? OR depends_on_id = ?`, id, id); err != nil {
+		return fmt.Errorf("delete dependencies failed: %w", err)
+	}
+	res, err := tx.Exec(`DELETE FROM tickets WHERE id = ? AND project = ?`, id, project)
 	if err != nil {
 		return errors.New("delete failed")
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("no such ticket: %d", id)
+		return noSuchTicket(id)
 	}
-	return nil
+	return tx.Commit()
 }

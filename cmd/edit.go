@@ -10,14 +10,16 @@ import (
 )
 
 var (
-	editTitle       string
-	editBody        string
-	editBodyFile    string
-	editStatus      string
-	editPriority    int
-	editProject     string
-	editParent      string
-	editClearParent bool
+	editTitle             string
+	editBody              string
+	editBodyFile          string
+	editStatus            string
+	editPriority          int
+	editProject           string
+	editParent            string
+	editClearParent       bool
+	editDependsOn         []string
+	editClearDependencies bool
 )
 
 var editCmd = &cobra.Command{
@@ -80,6 +82,19 @@ var editCmd = &cobra.Command{
 		if editClearParent {
 			options.ClearParent = true
 		}
+		if cmd.Flags().Changed("depends-on") && editClearDependencies {
+			return errors.New("use either --depends-on or --no-dependencies, not both")
+		}
+		if cmd.Flags().Changed("depends-on") {
+			dependsOnIDs, err := resolveRefs(editDependsOn)
+			if err != nil {
+				return err
+			}
+			options.DependsOnIDs = &dependsOnIDs
+		}
+		if editClearDependencies {
+			options.ClearDependencies = true
+		}
 
 		ticket, err := tix.Edit(id, options)
 		if err != nil {
@@ -115,6 +130,8 @@ func init() {
 	editCmd.Flags().StringVar(&editProject, "project", "", "new project name")
 	editCmd.Flags().StringVar(&editParent, "parent", "", "parent ticket to group this one under (epic)")
 	editCmd.Flags().BoolVar(&editClearParent, "no-parent", false, "remove this ticket's parent")
+	editCmd.Flags().StringSliceVar(&editDependsOn, "depends-on", nil, "replace dependency tickets this one depends on")
+	editCmd.Flags().BoolVar(&editClearDependencies, "no-dependencies", false, "remove this ticket's dependencies")
 	editCmd.Flags().BoolVar(&jsonOutput, "json", false, "output ticket as JSON")
 	editCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
 	editCmd.Flags().StringVar(&fieldsOutput, "fields", "", "comma-separated JSON fields to include")

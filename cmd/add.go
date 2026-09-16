@@ -15,6 +15,7 @@ var body string
 var bodyFile string
 var createProject bool
 var parentRef string
+var dependsOnRefs []string
 
 var addCmd = &cobra.Command{
 	Use:               "add",
@@ -73,8 +74,12 @@ var addCmd = &cobra.Command{
 			}
 			parentID = &id
 		}
+		dependsOnIDs, err := resolveRefs(dependsOnRefs)
+		if err != nil {
+			return err
+		}
 
-		id, err := tix.Add(title, body, priority, project, parentID)
+		id, err := tix.Add(title, body, priority, project, parentID, dependsOnIDs...)
 		if err != nil {
 			return fmt.Errorf("add failed: %w", err)
 		}
@@ -94,5 +99,6 @@ func init() {
 	addCmd.Flags().StringVar(&bodyFile, "body-file", "", "read ticket body from file")
 	addCmd.Flags().IntVarP(&priority, "priority", "p", 2, "ticket priority")
 	addCmd.Flags().StringVar(&parentRef, "parent", "", "parent ticket to group this one under (epic)")
+	addCmd.Flags().StringSliceVar(&dependsOnRefs, "depends-on", nil, "ticket this one depends on; repeat or comma-separate for more")
 	rootCmd.AddCommand(addCmd)
 }

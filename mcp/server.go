@@ -144,19 +144,34 @@ func ticketDetail(t tix.Ticket) string {
 	if t.ParentID != nil {
 		detail += fmt.Sprintf("\nparent: %d", *t.ParentID)
 	}
+	if len(t.DependsOnIDs) > 0 {
+		detail += fmt.Sprintf("\ndepends_on: %s", joinInts(t.DependsOnIDs))
+	}
+	if len(t.BlockedByIDs) > 0 {
+		detail += fmt.Sprintf("\nblocked_by: %s", joinInts(t.BlockedByIDs))
+	}
 	if t.Body != "" {
 		detail += "\n" + t.Body
 	}
 	return detail
 }
 
+func joinInts(values []int) string {
+	parts := make([]string, len(values))
+	for i, value := range values {
+		parts[i] = fmt.Sprint(value)
+	}
+	return strings.Join(parts, ", ")
+}
+
 type addArgs struct {
-	Title    string `json:"title" jsonschema:"the ticket title"`
-	Body     string `json:"body" jsonschema:"the ticket body/description"`
-	Priority *int   `json:"priority,omitempty" jsonschema:"priority 0-5, lower is more urgent (default 2)"`
-	Project  string `json:"project" jsonschema:"the project the ticket belongs to; must be an existing project unless create is true"`
-	Create   bool   `json:"create,omitempty" jsonschema:"create the project if it does not exist yet"`
-	ParentID *int   `json:"parent_id,omitempty" jsonschema:"id of a ticket in the same project to group this one under (epic)"`
+	Title        string `json:"title" jsonschema:"the ticket title"`
+	Body         string `json:"body" jsonschema:"the ticket body/description"`
+	Priority     *int   `json:"priority,omitempty" jsonschema:"priority 0-5, lower is more urgent (default 2)"`
+	Project      string `json:"project" jsonschema:"the project the ticket belongs to; must be an existing project unless create is true"`
+	Create       bool   `json:"create,omitempty" jsonschema:"create the project if it does not exist yet"`
+	ParentID     *int   `json:"parent_id,omitempty" jsonschema:"id of a ticket in the same project to group this one under (epic)"`
+	DependsOnIDs []int  `json:"depends_on_ids,omitempty" jsonschema:"ticket ids this ticket depends on; unresolved dependencies make the new ticket blocked"`
 }
 
 func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.CallToolResult, any, error) {
@@ -174,7 +189,7 @@ func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.Call
 	if err != nil {
 		return nil, nil, err
 	}
-	id, err := tix.Add(args.Title, args.Body, priority, project, args.ParentID)
+	id, err := tix.Add(args.Title, args.Body, priority, project, args.ParentID, args.DependsOnIDs...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("add failed: %w", err)
 	}
@@ -358,28 +373,35 @@ func showTool(_ context.Context, _ *mcp.CallToolRequest, args showArgs) (*mcp.Ca
 }
 
 type editArgs struct {
-	ID          int     `json:"id" jsonschema:"the ticket id"`
-	Title       *string `json:"title,omitempty" jsonschema:"new ticket title"`
-	Body        *string `json:"body,omitempty" jsonschema:"new ticket body"`
-	Status      *string `json:"status,omitempty" jsonschema:"new ticket status (e.g. open, in_progress, done)"`
-	Priority    *int    `json:"priority,omitempty" jsonschema:"new ticket priority"`
-	Project     *string `json:"project,omitempty" jsonschema:"new project name"`
-	ParentID    *int    `json:"parent_id,omitempty" jsonschema:"id of a ticket in the same project to group this one under (epic)"`
-	ClearParent bool    `json:"clear_parent,omitempty" jsonschema:"remove this ticket's parent; conflicts with parent_id"`
+	ID                int     `json:"id" jsonschema:"the ticket id"`
+	Title             *string `json:"title,omitempty" jsonschema:"new ticket title"`
+	Body              *string `json:"body,omitempty" jsonschema:"new ticket body"`
+	Status            *string `json:"status,omitempty" jsonschema:"new ticket status (e.g. open, in_progress, done)"`
+	Priority          *int    `json:"priority,omitempty" jsonschema:"new ticket priority"`
+	Project           *string `json:"project,omitempty" jsonschema:"new project name"`
+	ParentID          *int    `json:"parent_id,omitempty" jsonschema:"id of a ticket in the same project to group this one under (epic)"`
+	ClearParent       bool    `json:"clear_parent,omitempty" jsonschema:"remove this ticket's parent; conflicts with parent_id"`
+	DependsOnIDs      *[]int  `json:"depends_on_ids,omitempty" jsonschema:"replace the ticket ids this ticket depends on"`
+	ClearDependencies bool    `json:"clear_dependencies,omitempty" jsonschema:"remove this ticket's dependencies; conflicts with depends_on_ids"`
 }
 
 func editTool(_ context.Context, _ *mcp.CallToolRequest, args editArgs) (*mcp.CallToolResult, any, error) {
 	if args.ParentID != nil && args.ClearParent {
 		return nil, nil, fmt.Errorf("use either parent_id or clear_parent, not both")
 	}
+	if args.DependsOnIDs != nil && args.ClearDependencies {
+		return nil, nil, fmt.Errorf("use either depends_on_ids or clear_dependencies, not both")
+	}
 	ticket, err := tix.Edit(args.ID, tix.EditOptions{
-		Title:       args.Title,
-		Body:        args.Body,
-		Status:      args.Status,
-		Priority:    args.Priority,
-		Project:     args.Project,
-		ParentID:    args.ParentID,
-		ClearParent: args.ClearParent,
+		Title:             args.Title,
+		Body:              args.Body,
+		Status:            args.Status,
+		Priority:          args.Priority,
+		Project:           args.Project,
+		ParentID:          args.ParentID,
+		ClearParent:       args.ClearParent,
+		DependsOnIDs:      args.DependsOnIDs,
+		ClearDependencies: args.ClearDependencies,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("edit failed: %w", err)
