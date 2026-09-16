@@ -244,7 +244,7 @@ func ResolveRef(ref string) (int, error) {
 
 	var project string
 	if err := db.QueryRow(`SELECT project FROM tickets WHERE id = ?`, id).Scan(&project); err != nil {
-		return 0, fmt.Errorf("no such ticket: %s", ref)
+		return 0, noSuchTicket(ref)
 	}
 	actual, err := PrefixFor(project)
 	if err != nil {
