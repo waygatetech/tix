@@ -73,7 +73,11 @@ func TestWebHandlerRendersEveryProject(t *testing.T) {
 	if _, err := tix.CreateProject(tix.Project{Name: "zen"}); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	if _, err := tix.Add("fix login", "users cannot log in", 0, "acme", nil); err != nil {
+	login, err := tix.Add("fix login", "users cannot log in", 0, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := tix.Add("deploy app", "waiting on login", 1, "acme", nil, int(login)); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if _, err := tix.Add("tune cache", "", 2, "zen", nil); err != nil {
@@ -92,6 +96,9 @@ func TestWebHandlerRendersEveryProject(t *testing.T) {
 	for _, want := range []string{
 		"fix login",           // a ticket title
 		"users cannot log in", // its body, available to expand and to search
+		"deploy app",          // a dependent ticket
+		"deps 1",              // visible dependency indicator
+		"blocked",             // every present status is shown, not just the core three
 		`data-project="acme"`, // the project filter hooks
 		`data-project="zen"`,  // including the project with no repo path
 		"ac-1",                // the prefixed ref, not the bare row id

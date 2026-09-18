@@ -14,6 +14,13 @@ func TestBuildDashboardGroupsEveryProject(t *testing.T) {
 	if _, err := Add("fix login", "cannot log in", 0, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
+	blocker, err := Add("restore config", "", 1, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := Add("deploy app", "", 1, "acme", nil, int(blocker)); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
 	shipped, err := Add("ship docs", "", 2, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
@@ -30,26 +37,34 @@ func TestBuildDashboardGroupsEveryProject(t *testing.T) {
 		t.Fatalf("BuildDashboard: %v", err)
 	}
 
-	if board.Total != 3 {
-		t.Fatalf("Total = %d, want 3", board.Total)
+	if board.Total != 5 {
+		t.Fatalf("Total = %d, want 5", board.Total)
 	}
-	want := map[string]int{"open": 2, "done": 1}
+	want := map[string]int{"open": 3, "blocked": 1, "done": 1}
 	if !reflect.DeepEqual(board.StatusCounts, want) {
 		t.Fatalf("StatusCounts = %v, want %v", board.StatusCounts, want)
+	}
+	wantTallies := []StatusCount{{Status: "open", Count: 3}, {Status: "done", Count: 1}, {Status: "blocked", Count: 1}}
+	if !reflect.DeepEqual(board.StatusTallies(), wantTallies) {
+		t.Fatalf("StatusTallies = %v, want %v", board.StatusTallies(), wantTallies)
 	}
 	if got := []string{board.Projects[0].Project, board.Projects[1].Project}; !reflect.DeepEqual(got, []string{"acme", "zen"}) {
 		t.Fatalf("projects = %v, want [acme zen]", got)
 	}
 
 	acme := board.Projects[0]
-	if acme.Total != 2 || acme.Open() != 1 || acme.Done() != 1 {
-		t.Fatalf("acme counts = total %d open %d done %d, want 2/1/1", acme.Total, acme.Open(), acme.Done())
+	if acme.Total != 4 || acme.Open() != 2 || acme.Done() != 1 || acme.StatusCounts["blocked"] != 1 {
+		t.Fatalf("acme counts = total %d open %d done %d blocked %d, want 4/2/1/1", acme.Total, acme.Open(), acme.Done(), acme.StatusCounts["blocked"])
 	}
-	if acme.Percent() != 50 {
-		t.Fatalf("acme Percent() = %d, want 50", acme.Percent())
+	if acme.Percent() != 25 {
+		t.Fatalf("acme Percent() = %d, want 25", acme.Percent())
 	}
-	if len(acme.Tickets) != 2 {
-		t.Fatalf("acme tickets = %d, want 2", len(acme.Tickets))
+	if len(acme.Tickets) != 4 {
+		t.Fatalf("acme tickets = %d, want 4", len(acme.Tickets))
+	}
+	dependent := acme.Tickets[2]
+	if dependent.Title != "deploy app" || !reflect.DeepEqual(dependent.DependsOnIDs, []int{int(blocker)}) || !reflect.DeepEqual(dependent.BlockedByIDs, []int{int(blocker)}) {
+		t.Fatalf("dependent ticket = %+v, want hydrated dependency on %d", dependent, blocker)
 	}
 }
 

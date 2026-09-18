@@ -151,6 +151,13 @@
   td.state { width: 1%; white-space: nowrap; }
   td.title { width: 100%; }
   .ticket .caret { color: var(--faint); font-size: .7rem; margin-left: .4rem; }
+  .dep-badge {
+    display: inline-block; margin-left: .45rem; padding: .05rem .4rem;
+    border: 1px solid var(--border); border-radius: 999px;
+    color: var(--muted); background: var(--panel-alt);
+    font-size: .7rem; font-weight: 600; vertical-align: .08rem; white-space: nowrap;
+  }
+  .dep-badge.blocked { color: var(--other-fg); background: var(--other-bg); }
   .status { display: inline-block; padding: .1rem .5rem; border-radius: 5px; font-size: .75rem; font-weight: 600; }
   .status-open { background: var(--open-bg); color: var(--open-fg); }
   .status-in_progress { background: var(--prog-bg); color: var(--prog-fg); }
@@ -231,18 +238,12 @@
 
 {{if .Projects}}
 <div class="rollup">
-  <button class="tile" type="button" data-only="open">
-    <div class="n">{{index .StatusCounts "open"}}</div>
-    <div class="k">Open</div>
+  {{range .StatusTallies}}
+  <button class="tile" type="button" data-only="{{.Status}}">
+    <div class="n">{{.Count}}</div>
+    <div class="k">{{.Status | label}}</div>
   </button>
-  <button class="tile" type="button" data-only="in_progress">
-    <div class="n">{{index .StatusCounts "in_progress"}}</div>
-    <div class="k">In progress</div>
-  </button>
-  <button class="tile" type="button" data-only="done">
-    <div class="n">{{index .StatusCounts "done"}}</div>
-    <div class="k">Done</div>
-  </button>
+  {{end}}
   <div class="tile total">
     <div class="n">{{len .Projects}}</div>
     <div class="k">Projects</div>
@@ -274,9 +275,7 @@
       {{if .RepoPath}}<span class="repo">{{.RepoPath}}</span>{{end}}
       <span class="spacer"></span>
       <span class="tallies">
-        {{if .Open}}<span>{{.Open}} open</span>{{end}}
-        {{if .InProgress}}<span>· {{.InProgress}} in progress</span>{{end}}
-        {{if .Done}}<span>· {{.Done}} done</span>{{end}}
+        {{range .StatusTallies}}<span>{{.Count}} {{.Status | label}}</span>{{end}}
         {{if not .Total}}<span>no tickets</span>{{end}}
       </span>
     </header>
@@ -293,7 +292,15 @@
           <td class="ref">{{.Ref}}</td>
           <td class="pri">P{{.Priority}}</td>
           <td class="state"><span class="status status-{{.Status | statusClass}}">{{.Status | label}}</span></td>
-          <td class="title">{{.Title}}<span class="caret">▸</span></td>
+          <td class="title">
+            {{.Title}}
+            {{if .DependsOnIDs}}
+            <span class="dep-badge{{if .BlockedByIDs}} blocked{{end}}" title="Depends on {{.DependsOnIDs}}">
+              deps {{len .DependsOnIDs}}{{if .BlockedByIDs}} / blocked {{len .BlockedByIDs}}{{end}}
+            </span>
+            {{end}}
+            <span class="caret">▸</span>
+          </td>
         </tr>
         <tr class="body{{if not .Body}} nobody{{end}}"
             data-id="{{.ID}}" data-title="{{.Title}}" data-body="{{.Body}}"

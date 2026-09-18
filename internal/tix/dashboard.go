@@ -19,6 +19,12 @@ type DashboardTicket struct {
 	Ref string `json:"ref"`
 }
 
+// StatusCount is a presentable tally for one ticket status.
+type StatusCount struct {
+	Status string `json:"status"`
+	Count  int    `json:"count"`
+}
+
 // DashboardProject is one project's tickets with the counts that summarize them.
 type DashboardProject struct {
 	Project      string            `json:"project"`
@@ -40,6 +46,11 @@ type Dashboard struct {
 	Priorities []int    `json:"priorities"`
 }
 
+// StatusTallies returns every status present across the dashboard in display order.
+func (d Dashboard) StatusTallies() []StatusCount {
+	return statusTallies(d.StatusCounts)
+}
+
 // Done reports how many tickets are finished, which is the numerator of the
 // progress a reader is looking for.
 func (p DashboardProject) Done() int {
@@ -54,6 +65,11 @@ func (p DashboardProject) Open() int {
 // InProgress reports how many tickets are claimed.
 func (p DashboardProject) InProgress() int {
 	return p.StatusCounts["in_progress"]
+}
+
+// StatusTallies returns every status present in the project in display order.
+func (p DashboardProject) StatusTallies() []StatusCount {
+	return statusTallies(p.StatusCounts)
 }
 
 // Percent is how much of the project is done, rounded down, and 0 for a project
@@ -159,6 +175,22 @@ func sortStatuses(present map[string]bool) []string {
 	}
 	sort.Strings(rest)
 	return append(statuses, rest...)
+}
+
+func statusTallies(counts map[string]int) []StatusCount {
+	present := map[string]bool{}
+	for status, count := range counts {
+		if count > 0 {
+			present[status] = true
+		}
+	}
+
+	statuses := sortStatuses(present)
+	tallies := make([]StatusCount, 0, len(statuses))
+	for _, status := range statuses {
+		tallies = append(tallies, StatusCount{Status: status, Count: counts[status]})
+	}
+	return tallies
 }
 
 func sortedKeys(present map[int]bool) []int {
