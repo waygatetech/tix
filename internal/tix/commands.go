@@ -1,6 +1,7 @@
 package tix
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -370,7 +371,39 @@ func Done(id int) error {
 	if n == 0 {
 		return noSuchTicket(id)
 	}
-	if _, err := tx.Exec(`
+	// Closing an epic's last unfinished child closes the epic, and so on up.
+	for doneID := id; ; {
+		if err := unblockDependents(tx, doneID); err != nil {
+			return err
+		}
+		var parentID int
+		err := tx.QueryRow(`
+			SELECT parent.id FROM tickets child
+			JOIN tickets parent ON parent.id = child.parent_id
+			WHERE child.id = ?
+				AND parent.status != 'done'
+				AND NOT EXISTS (
+					SELECT 1 FROM tickets sibling
+					WHERE sibling.parent_id = parent.id AND sibling.status != 'done'
+				)`, doneID).Scan(&parentID)
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("close parent failed: %w", err)
+		}
+		if _, err := tx.Exec(`UPDATE tickets SET status = 'done', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, parentID); err != nil {
+			return fmt.Errorf("close parent failed: %w", err)
+		}
+		doneID = parentID
+	}
+	return tx.Commit()
+}
+
+// unblockDependents reopens blocked tickets whose last unfinished dependency
+// was id.
+func unblockDependents(exec sqlExecer, id int) error {
+	if _, err := exec.Exec(`
 		UPDATE tickets
 		SET status = 'open', updated_at = CURRENT_TIMESTAMP
 		WHERE status = 'blocked'
@@ -384,7 +417,7 @@ func Done(id int) error {
 			)`, id); err != nil {
 		return fmt.Errorf("unblock dependents failed: %w", err)
 	}
-	return tx.Commit()
+	return nil
 }
 
 func ListTickets(options ListOptions) ([]Ticket, error) {
@@ -583,16 +616,32 @@ func FormatAge(d time.Duration) string {
 	return fmt.Sprintf("%dd%dh", days, int(d.Hours())%24)
 }
 
-func NextTicket(project string) (Ticket, error) {
-	project, err := ResolveProject(project)
-	if err != nil {
-		return Ticket{}, err
-	}
+type sqlQueryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
 
-	ticket, err := scanTicket(db.QueryRow(
-		`SELECT `+ticketColumns+` FROM tickets
-			 WHERE status = 'open'
+// nextClaimable picks the next ticket to work on. A ticket with unfinished
+// children is an epic: it is never claimed itself, and when it comes up next
+// its own children are searched instead, in the same order. An epic with
+// nothing claimable left is skipped. Top-level candidates are tickets with no
+// parent, or whose parent is done, so children of a closed epic are not lost.
+func nextClaimable(q sqlQueryer, project string, parentID *int, depth int) (int, bool, error) {
+	if depth > 1000 {
+		return 0, false, errors.New("parent chain is too deep to search")
+	}
+	scope := `(parent_id IS NULL OR parent_id IN (SELECT id FROM tickets WHERE status = 'done'))`
+	args := []any{project}
+	if parentID != nil {
+		scope = `parent_id = ?`
+		args = append(args, *parentID)
+	}
+	rows, err := q.Query(
+		`SELECT id, status, EXISTS (
+				SELECT 1 FROM tickets child WHERE child.parent_id = tickets.id AND child.status != 'done'
+			 ) FROM tickets
+			 WHERE status != 'done'
 			 AND project = ?
+			 AND `+scope+`
 			 AND NOT EXISTS (
 				SELECT 1
 				FROM ticket_dependencies td
@@ -600,11 +649,64 @@ func NextTicket(project string) (Ticket, error) {
 				WHERE td.ticket_id = tickets.id
 					AND dep.status != 'done'
 			 )
-			 ORDER BY priority ASC, order_rank ASC LIMIT 1`,
-		project,
-	).Scan)
+			 ORDER BY priority ASC, order_rank ASC`,
+		args...,
+	)
 	if err != nil {
+		return 0, false, err
+	}
+	type candidate struct {
+		id     int
+		status string
+		epic   bool
+	}
+	// Collected before recursing, since a transaction's connection cannot
+	// run the next level's query while these rows are still open.
+	var candidates []candidate
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.id, &c.status, &c.epic); err != nil {
+			rows.Close()
+			return 0, false, err
+		}
+		candidates = append(candidates, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, false, err
+	}
+
+	for _, c := range candidates {
+		if !c.epic {
+			if c.status == "open" {
+				return c.id, true, nil
+			}
+			continue
+		}
+		id, ok, err := nextClaimable(q, project, &c.id, depth+1)
+		if err != nil || ok {
+			return id, ok, err
+		}
+	}
+	return 0, false, nil
+}
+
+func NextTicket(project string) (Ticket, error) {
+	project, err := ResolveProject(project)
+	if err != nil {
+		return Ticket{}, err
+	}
+
+	id, ok, err := nextClaimable(db, project, nil, 0)
+	if err != nil {
+		return Ticket{}, err
+	}
+	if !ok {
 		return Ticket{}, errors.New("no open tickets")
+	}
+	ticket, err := scanTicket(db.QueryRow(`SELECT `+ticketColumns+` FROM tickets WHERE id = ?`, id).Scan)
+	if err != nil {
+		return Ticket{}, err
 	}
 	dependsOn, blockedBy, err := dependenciesFor(ticket.ID)
 	if err != nil {
@@ -616,6 +718,48 @@ func NextTicket(project string) (Ticket, error) {
 }
 
 func ClaimNext(project string) (Ticket, error) {
+	ticket, _, err := ClaimNextEvaluated(context.Background(), project)
+	return ticket, err
+}
+
+// ClaimNextEvaluated applies the optional Jev judgment layer immediately
+// before the existing claim transition. The returned evaluation is nil when
+// Jev is off, preserving both behavior and network isolation by default.
+func ClaimNextEvaluated(ctx context.Context, project string) (Ticket, *JevEvaluation, error) {
+	cfg, err := loadJevConfig()
+	if err != nil {
+		return Ticket{}, nil, err
+	}
+	if cfg.Mode == JevOff {
+		ticket, err := claimNext(project)
+		return ticket, nil, err
+	}
+
+	candidate, err := NextTicket(project)
+	if err != nil {
+		return Ticket{}, nil, err
+	}
+	prefix, err := PrefixFor(candidate.Project)
+	if err != nil {
+		return Ticket{}, nil, err
+	}
+	evaluation := evaluateJev(ctx, cfg, candidate, prefix)
+	status := "in_progress"
+	if cfg.Mode == JevEnforce && evaluation.Err == nil && evaluation.PolicyDecision == "require_human_input" {
+		status = "blocked"
+	}
+	ticket, err := transitionOpenTicket(candidate.ID, status)
+	if err != nil {
+		return Ticket{}, &evaluation, err
+	}
+	// Telemetry must not turn Jev into a claim-time failure. The schema is
+	// migrated with the rest of tix, so this can fail only on a database error
+	// that the next normal write will also expose.
+	_ = recordJevEvaluation(ticket.ID, evaluation)
+	return ticket, &evaluation, nil
+}
+
+func claimNext(project string) (Ticket, error) {
 	project, err := ResolveProject(project)
 	if err != nil {
 		return Ticket{}, err
@@ -627,22 +771,11 @@ func ClaimNext(project string) (Ticket, error) {
 	}
 	defer tx.Rollback()
 
-	var id int
-	err = tx.QueryRow(
-		`SELECT id FROM tickets
-			 WHERE status = 'open'
-			 AND project = ?
-			 AND NOT EXISTS (
-				SELECT 1
-				FROM ticket_dependencies td
-				JOIN tickets dep ON dep.id = td.depends_on_id
-				WHERE td.ticket_id = tickets.id
-					AND dep.status != 'done'
-			 )
-			 ORDER BY priority ASC, order_rank ASC LIMIT 1`,
-		project,
-	).Scan(&id)
+	id, ok, err := nextClaimable(tx, project, nil, 0)
 	if err != nil {
+		return Ticket{}, err
+	}
+	if !ok {
 		return Ticket{}, errors.New("no open tickets")
 	}
 
@@ -672,6 +805,35 @@ func ClaimNext(project string) (Ticket, error) {
 	}
 	ticket.DependsOnIDs = dependsOn
 	ticket.BlockedByIDs = blockedBy
+	return ticket, nil
+}
+
+func transitionOpenTicket(id int, status string) (Ticket, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return Ticket{}, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE tickets SET status = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND status = 'open'`, status, id)
+	if err != nil {
+		return Ticket{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Ticket{}, errors.New("ticket already claimed")
+	}
+	ticket, err := scanTicket(tx.QueryRow(`SELECT `+ticketColumns+` FROM tickets WHERE id = ?`, id).Scan)
+	if err != nil {
+		return Ticket{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Ticket{}, err
+	}
+	dependsOn, blockedBy, err := dependenciesFor(ticket.ID)
+	if err != nil {
+		return Ticket{}, err
+	}
+	ticket.DependsOnIDs, ticket.BlockedByIDs = dependsOn, blockedBy
 	return ticket, nil
 }
 

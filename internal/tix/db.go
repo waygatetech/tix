@@ -247,6 +247,28 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS ticket_dependencies_depends_on
 		ON ticket_dependencies(depends_on_id, ticket_id);`,
+	// Jev evaluations are deliberately append-only telemetry. Keeping them
+	// separate from tickets means semantic observations do not become workflow
+	// state, and a failed evaluation remains distinguishable from a 0.0 answer.
+	`CREATE TABLE IF NOT EXISTS jev_evaluations (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		ticket_id INTEGER NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		model TEXT NOT NULL DEFAULT '',
+		product_decision_required REAL,
+		requirements_ambiguous REAL,
+		scope_risk REAL,
+		policy_decision TEXT NOT NULL,
+		latency_ms INTEGER NOT NULL,
+		input_tokens INTEGER NOT NULL DEFAULT 0,
+		output_tokens INTEGER NOT NULL DEFAULT 0,
+		mode TEXT NOT NULL,
+		http_status INTEGER NOT NULL DEFAULT 0,
+		status TEXT NOT NULL,
+		error TEXT NOT NULL DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS jev_evaluations_ticket_id
+		ON jev_evaluations(ticket_id, created_at);`,
 }
 
 // migrate applies every migration the database has not seen yet. The version

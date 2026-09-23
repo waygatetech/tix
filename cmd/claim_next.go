@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/waygatetech/tix/internal/tix"
 )
+
+var claimNextVerbose bool
 
 var claimNextCmd = &cobra.Command{
 	Use:               "claim-next",
@@ -16,9 +19,14 @@ var claimNextCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		ticket, err := tix.ClaimNext(project)
+		ticket, evaluation, err := tix.ClaimNextEvaluated(cmd.Context(), project)
 		if err != nil {
 			return err
+		}
+		if claimNextVerbose && evaluation != nil {
+			fmt.Fprintln(os.Stderr, tix.FormatJevEvaluation(*evaluation))
+		} else if evaluation != nil && evaluation.Mode == tix.JevEnforce && evaluation.Err != nil {
+			fmt.Fprintf(os.Stderr, "warning: Jev evaluation failed; claiming ticket (fail open): %v\n", evaluation.Err)
 		}
 		if jsonOutput {
 			return printJSON(ticket, compactOutput, fieldsOutput)
@@ -32,6 +40,9 @@ var claimNextCmd = &cobra.Command{
 		if ticket.Body != "" {
 			fmt.Println(ticket.Body)
 		}
+		if ticket.Status == "blocked" && evaluation != nil {
+			fmt.Println("Human input required; ticket left blocked.")
+		}
 		return nil
 	},
 }
@@ -41,5 +52,6 @@ func init() {
 	claimNextCmd.Flags().BoolVar(&jsonOutput, "json", false, "output ticket as JSON")
 	claimNextCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
 	claimNextCmd.Flags().StringVar(&fieldsOutput, "fields", "", "comma-separated JSON fields to include")
+	claimNextCmd.Flags().BoolVarP(&claimNextVerbose, "verbose", "v", false, "show Jev evaluation details")
 	rootCmd.AddCommand(claimNextCmd)
 }

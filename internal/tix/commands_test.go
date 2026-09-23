@@ -12,6 +12,7 @@ import (
 
 func setupTestDB(t *testing.T) {
 	t.Helper()
+	t.Setenv("TIX_JEV_MODE", "off")
 
 	if db != nil {
 		_ = db.Close()
@@ -195,6 +196,51 @@ func TestDoneFiltersOpenListAndNext(t *testing.T) {
 	_, err = NextTicket("acme")
 	if err == nil || err.Error() != "no open tickets" {
 		t.Fatalf("NextTicket(acme) after all done error = %v, want no open tickets", err)
+	}
+}
+
+func TestClaimNextDescendsIntoEpicAndDoneClosesIt(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	add := func(title string, priority int, parent *int) int {
+		t.Helper()
+		id, err := Add(title, "", priority, "acme", parent)
+		if err != nil {
+			t.Fatalf("Add(%q): %v", title, err)
+		}
+		return int(id)
+	}
+	epic := add("epic", 1, nil)
+	loose := add("loose", 2, nil)
+	child1 := add("child one", 3, &epic)
+	child2 := add("child two", 3, &epic)
+
+	// The epic outranks the loose ticket, so its lower-priority children do too.
+	for _, want := range []int{child1, child2, loose} {
+		got, err := ClaimNext("acme")
+		if err != nil {
+			t.Fatalf("ClaimNext: %v", err)
+		}
+		if got.ID != want {
+			t.Fatalf("ClaimNext = %d (%s), want %d", got.ID, got.Title, want)
+		}
+	}
+	if _, err := ClaimNext("acme"); err == nil || err.Error() != "no open tickets" {
+		t.Fatalf("ClaimNext with only the epic left = %v, want no open tickets", err)
+	}
+
+	if err := Done(child1); err != nil {
+		t.Fatalf("Done(child1): %v", err)
+	}
+	if ticket, _ := Show(epic); ticket.Status != "open" {
+		t.Fatalf("epic status after one child done = %q, want open", ticket.Status)
+	}
+	if err := Done(child2); err != nil {
+		t.Fatalf("Done(child2): %v", err)
+	}
+	if ticket, _ := Show(epic); ticket.Status != "done" {
+		t.Fatalf("epic status after all children done = %q, want done", ticket.Status)
 	}
 }
 

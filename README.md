@@ -289,6 +289,24 @@ The MCP figure was 6,052 bytes ≈ 1,354 tokens until the tools stopped declarin
 
 Token counts are from OpenAI's `o200k_base` tokenizer over the serialized `tools/list` payload; exact numbers vary by tokenizer and by how a client renders schemas into the prompt, but the order-of-magnitude gap is the point. Byte counts are exact and reproducible — `tix init-agent` writes the block measured above.
 
+### Optional Jev ticket evaluation
+
+`claim-next` can use [Jev](https://docs.typesafe.ai/api) as a lightweight semantic judgment layer. It is off by default. Start in shadow mode so evaluations are recorded without changing which tickets are claimed:
+
+```sh
+JEV_API_KEY=... TIX_JEV_MODE=shadow tix claim-next --project acme
+```
+
+After reviewing the recorded behavior, enforcement can be enabled with:
+
+```sh
+JEV_API_KEY=... TIX_JEV_MODE=enforce tix claim-next --project acme
+```
+
+Jev supplies probabilities for unresolved product decisions, ambiguous requirements, and scope risk. `tix` retains deterministic control: configurable thresholds decide whether enforce mode leaves the ticket `blocked` for human input. Shadow mode never blocks, and API, network, or response failures fail open in both enabled modes. Use `claim-next --verbose` to see an evaluation.
+
+The optional settings are `TIX_JEV_BASE_URL`, `TIX_JEV_MODEL` (default `jev-latest`), `TIX_JEV_PRODUCT_DECISION_THRESHOLD`, `TIX_JEV_REQUIREMENTS_AMBIGUOUS_THRESHOLD`, and `TIX_JEV_SCOPE_RISK_THRESHOLD`. Each threshold defaults to `0.8`.
+
 ## Development
 
 ```sh
