@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/waygatetech/tix/internal/tix"
@@ -15,6 +16,7 @@ var statusFilter string
 var priorityFilter string
 var limitFilter int
 var parentFilter string
+var conceptFilter []string
 
 var listCmd = &cobra.Command{
 	Use:               "list",
@@ -52,8 +54,12 @@ func printTickets(tickets []tix.Ticket) error {
 		if ticket.Status == "done" {
 			marker = "x "
 		}
-		fmt.Printf("%s%s [P%d] %s\n",
-			marker, tix.FormatID(prefixes[ticket.Project], ticket.ID), ticket.Priority, ticket.Title)
+		concepts := ""
+		if len(ticket.Concepts) > 0 {
+			concepts = " {" + strings.Join(ticket.Concepts, ", ") + "}"
+		}
+		fmt.Printf("%s%s [P%d] %s%s\n",
+			marker, tix.FormatID(prefixes[ticket.Project], ticket.ID), ticket.Priority, ticket.Title, concepts)
 	}
 	return nil
 }
@@ -65,6 +71,7 @@ func init() {
 	listCmd.Flags().StringVar(&priorityFilter, "priority", "", "filter by priority")
 	listCmd.Flags().IntVar(&limitFilter, "limit", 0, "limit number of tickets")
 	listCmd.Flags().StringVar(&parentFilter, "parent", "", "only tickets grouped under this parent ticket (epic)")
+	listCmd.Flags().StringArrayVar(&conceptFilter, "concept", nil, "only tickets whose plan declares this concept (repeatable)")
 	listCmd.Flags().BoolVar(&jsonOutput, "json", false, "output tickets as JSON")
 	listCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
 	listCmd.Flags().StringVar(&fieldsOutput, "fields", "", "comma-separated JSON fields to include")
@@ -77,10 +84,11 @@ func listOptions() (tix.ListOptions, error) {
 		return tix.ListOptions{}, err
 	}
 	options := tix.ListOptions{
-		Project: scope,
-		ShowAll: showAll,
-		Status:  statusFilter,
-		Limit:   limitFilter,
+		Project:  scope,
+		ShowAll:  showAll,
+		Status:   statusFilter,
+		Limit:    limitFilter,
+		Concepts: conceptFilter,
 	}
 	if priorityFilter != "" {
 		priority, err := strconv.Atoi(priorityFilter)

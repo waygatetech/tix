@@ -340,3 +340,51 @@ func TestInitRegistry(t *testing.T) {
 		t.Fatalf("second InitRegistry() = %v, want already exists", err)
 	}
 }
+
+func TestListByConcept(t *testing.T) {
+	setupTestDB(t)
+	if _, err := CreateProject(Project{Name: "acme"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	add := func(plan string) int {
+		id, err := Add("concept ticket", "", 1, "acme", nil)
+		if err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+		if plan != "" {
+			if _, err := db.Exec(`UPDATE tickets SET plan = ? WHERE id = ?`, plan, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return int(id)
+	}
+	auth := add(`{"concepts":["auth.session"],"new_concepts":["auth.token"]}`)
+	billing := add(`{"concepts":["billing"]}`)
+	add("")
+
+	cases := []struct {
+		name     string
+		concepts []string
+		want     map[int][]string
+	}{
+		{"concepts", []string{"auth.session"}, map[int][]string{auth: {"auth.session", "auth.token"}}},
+		{"new_concepts", []string{"auth.token"}, map[int][]string{auth: {"auth.session", "auth.token"}}},
+		{"any of several", []string{"billing", "auth.session"}, map[int][]string{auth: {"auth.session", "auth.token"}, billing: {"billing"}}},
+		{"unknown", []string{"nope"}, map[int][]string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tickets, err := ListTickets(ListOptions{Project: "acme", Concepts: tc.concepts})
+			if err != nil {
+				t.Fatalf("ListTickets: %v", err)
+			}
+			got := map[int][]string{}
+			for _, ticket := range tickets {
+				got[ticket.ID] = ticket.Concepts
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

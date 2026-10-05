@@ -34,6 +34,9 @@ type Ticket struct {
 	// Leases are the concepts this ticket holds, loaded by StaleTickets only so
 	// a crashed agent's claims are visible where it is recovered.
 	Leases []string `json:"leases,omitempty"`
+	// Concepts are the concepts and new_concepts the ticket's cached plan
+	// declares, loaded by ListTickets only.
+	Concepts []string `json:"concepts,omitempty"`
 	// CreatedAt and UpdatedAt are stored UTC, and UpdatedAt moves on every
 	// write, so how long a ticket has sat in its current status is answerable.
 	CreatedAt time.Time `json:"created_at"`
@@ -92,6 +95,9 @@ type ListOptions struct {
 	// ParentID, when set, keeps only tickets grouped under this parent
 	// ticket (its children), instead of every ticket in the project.
 	ParentID *int
+	// Concepts, when set, keeps only tickets whose cached plan declares any
+	// of them in concepts or new_concepts.
+	Concepts []string
 }
 
 func Add(title, body string, priority int, project string, parentID *int, dependsOnIDs ...int) (int64, error) {
@@ -464,13 +470,56 @@ func ListTickets(options ListOptions) ([]Ticket, error) {
 		where = append(where, `parent_id = ?`)
 		args = append(args, *options.ParentID)
 	}
+	if len(options.Concepts) > 0 {
+		where = append(where, `EXISTS (SELECT 1 FROM `+planConcepts+` WHERE c.value IN (?`+strings.Repeat(`, ?`, len(options.Concepts)-1)+`))`)
+		for _, concept := range options.Concepts {
+			args = append(args, concept)
+		}
+	}
 	query := `SELECT ` + ticketColumns + ` FROM tickets WHERE ` + strings.Join(where, ` AND `) + ` ORDER BY priority ASC, order_rank ASC`
 	if options.Limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, options.Limit)
 	}
 
-	return queryTickets(query, args...)
+	tickets, err := queryTickets(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	if err := hydrateConcepts(project, tickets); err != nil {
+		return nil, err
+	}
+	return tickets, nil
+}
+
+// planConcepts expands the outer tickets row's cached plan into one row per
+// declared concept, as c.value.
+const planConcepts = `(VALUES ('$.concepts'), ('$.new_concepts')) p, json_each(tickets.plan, p.column1) c`
+
+// hydrateConcepts fills each ticket's Concepts from its cached plan.
+func hydrateConcepts(project string, tickets []Ticket) error {
+	rows, err := db.Query(`SELECT tickets.id, c.value FROM tickets, `+planConcepts+`
+		WHERE tickets.project = ? AND c.type = 'text' ORDER BY tickets.id, p.column1, c.key`, project)
+	if err != nil {
+		return fmt.Errorf("loading plan concepts: %w", err)
+	}
+	defer rows.Close()
+	declared := map[int][]string{}
+	for rows.Next() {
+		var id int
+		var concept string
+		if err := rows.Scan(&id, &concept); err != nil {
+			return fmt.Errorf("loading plan concepts: %w", err)
+		}
+		declared[id] = append(declared[id], concept)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("loading plan concepts: %w", err)
+	}
+	for i := range tickets {
+		tickets[i].Concepts = declared[tickets[i].ID]
+	}
+	return nil
 }
 
 // queryTickets runs a select over ticketColumns and collects the rows.

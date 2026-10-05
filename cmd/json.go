@@ -78,15 +78,25 @@ func filterJSONFields(value any, fields string) (any, error) {
 	}
 }
 
+// addExplicitFields adds ticket fields that plain JSON hides or omits when
+// empty, so --fields can still name them.
 func addExplicitFields(decoded, original any, wanted map[string]bool) {
-	if !wanted["order"] {
+	if !wanted["order"] && !wanted["concepts"] {
 		return
+	}
+	add := func(m map[string]any, ticket tix.Ticket) {
+		if wanted["order"] {
+			m["order"] = ticket.Order
+		}
+		if wanted["concepts"] {
+			m["concepts"] = append([]string{}, ticket.Concepts...)
+		}
 	}
 
 	switch value := original.(type) {
 	case tix.Ticket:
 		if m, ok := decoded.(map[string]any); ok {
-			m["order"] = value.Order
+			add(m, value)
 		}
 	case []tix.Ticket:
 		items, ok := decoded.([]any)
@@ -98,7 +108,7 @@ func addExplicitFields(decoded, original any, wanted map[string]bool) {
 				return
 			}
 			if m, ok := items[i].(map[string]any); ok {
-				m["order"] = ticket.Order
+				add(m, ticket)
 			}
 		}
 	}

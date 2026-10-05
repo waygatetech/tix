@@ -115,6 +115,8 @@ check "list filters by priority" '"priority":0' "$tmp/tix" list --project acme -
 check "list limits results" '[{"id":2,' "$tmp/tix" list --project acme --limit 1 --json --compact
 check "list supports JSON field selection" '[{"id":2,"title":"write docs"}' "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,title
 check "list exposes order when requested" '[{"id":2,"order":2}' "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,order
+check "list exposes concepts when requested" '[{"concepts":[],"id":2}' "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,concepts
+check "list filters by concept" '[]' "$tmp/tix" list --project acme --concept auth.session --json --compact
 
 # search is the duplicate check: it looks in the body as well as the title, so
 # a ticket whose subject only appears in its description still turns up
