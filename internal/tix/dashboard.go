@@ -16,7 +16,8 @@ var statusOrder = []string{"open", "in_progress", "done"}
 // an ID copied off the page can be pasted straight into a command.
 type DashboardTicket struct {
 	Ticket
-	Ref string `json:"ref"`
+	Ref    string `json:"ref"`
+	IsEpic bool   `json:"is_epic"`
 }
 
 // StatusCount is a presentable tally for one ticket status.
@@ -115,6 +116,12 @@ func BuildDashboard() (Dashboard, error) {
 
 	statuses := map[string]bool{}
 	priorities := map[int]bool{}
+	parentIDs := map[int]bool{}
+	for _, ticket := range tickets {
+		if ticket.ParentID != nil {
+			parentIDs[*ticket.ParentID] = true
+		}
+	}
 	for _, ticket := range tickets {
 		index, ok := indexes[ticket.Project]
 		if !ok {
@@ -133,6 +140,7 @@ func BuildDashboard() (Dashboard, error) {
 		project.Tickets = append(project.Tickets, DashboardTicket{
 			Ticket: ticket,
 			Ref:    FormatID(prefixes[ticket.Project], ticket.ID),
+			IsEpic: parentIDs[ticket.ID],
 		})
 		project.StatusCounts[ticket.Status]++
 		project.Total++
@@ -143,19 +151,65 @@ func BuildDashboard() (Dashboard, error) {
 		priorities[ticket.Priority] = true
 	}
 
-	// Finished tickets sink to the bottom of their project. They are the part of
-	// the list a reader scans last, and keeping them out of the middle means
-	// showing them never pushes live work off the screen.
+	// Keep each epic's descendants directly beneath it. Finished siblings sink
+	// below live siblings, preserving the old dashboard behavior within the
+	// hierarchy rather than separating children from their parent.
 	for i := range board.Projects {
-		tickets := board.Projects[i].Tickets
-		sort.SliceStable(tickets, func(a, b int) bool {
-			return tickets[a].Status != "done" && tickets[b].Status == "done"
-		})
+		board.Projects[i].Tickets = hierarchyTickets(board.Projects[i].Tickets)
 	}
 
 	board.Statuses = sortStatuses(statuses)
 	board.Priorities = sortedKeys(priorities)
 	return board, nil
+}
+
+func hierarchyTickets(tickets []DashboardTicket) []DashboardTicket {
+	known := make(map[int]bool, len(tickets))
+	for _, ticket := range tickets {
+		known[ticket.ID] = true
+	}
+
+	children := map[int][]DashboardTicket{}
+	var roots []DashboardTicket
+	for _, ticket := range tickets {
+		if ticket.ParentID != nil && known[*ticket.ParentID] {
+			children[*ticket.ParentID] = append(children[*ticket.ParentID], ticket)
+		} else {
+			roots = append(roots, ticket)
+		}
+	}
+	sinkDone := func(group []DashboardTicket) {
+		sort.SliceStable(group, func(a, b int) bool {
+			return group[a].Status != "done" && group[b].Status == "done"
+		})
+	}
+	sinkDone(roots)
+	for id := range children {
+		sinkDone(children[id])
+	}
+
+	ordered := make([]DashboardTicket, 0, len(tickets))
+	visited := map[int]bool{}
+	var appendTree func(DashboardTicket)
+	appendTree = func(ticket DashboardTicket) {
+		if visited[ticket.ID] {
+			return
+		}
+		visited[ticket.ID] = true
+		ordered = append(ordered, ticket)
+		for _, child := range children[ticket.ID] {
+			appendTree(child)
+		}
+	}
+	for _, root := range roots {
+		appendTree(root)
+	}
+	// Parent cycles are rejected by normal writes, but retaining any rows from
+	// a hand-edited database is safer than silently dropping them.
+	for _, ticket := range tickets {
+		appendTree(ticket)
+	}
+	return ordered
 }
 
 // sortStatuses orders the statuses present by where they sit in the workflow,

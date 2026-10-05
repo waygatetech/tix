@@ -47,13 +47,24 @@ const ticketColumns = `id, title, body, status, priority, order_rank, project, p
 func scanTicket(scan func(...any) error) (Ticket, error) {
 	var ticket Ticket
 	var parentID sql.NullInt64
+	var updatedAt sql.NullTime
 	err := scan(&ticket.ID, &ticket.Title, &ticket.Body, &ticket.Status,
-		&ticket.Priority, &ticket.Order, &ticket.Project, &parentID, &ticket.CreatedAt, &ticket.UpdatedAt)
+		&ticket.Priority, &ticket.Order, &ticket.Project, &parentID, &ticket.CreatedAt, &updatedAt)
+	if err != nil {
+		return ticket, err
+	}
 	if parentID.Valid {
 		id := int(parentID.Int64)
 		ticket.ParentID = &id
 	}
-	return ticket, err
+	// updated_at was added after created_at and remains nullable in SQLite.
+	// Treat a NULL left by a legacy or direct insert as an untouched ticket.
+	if updatedAt.Valid {
+		ticket.UpdatedAt = updatedAt.Time
+	} else {
+		ticket.UpdatedAt = ticket.CreatedAt
+	}
+	return ticket, nil
 }
 
 type ProjectSummary struct {
@@ -586,12 +597,12 @@ func StaleTickets(options StaleOptions) ([]Ticket, error) {
 		// cutoff is formatted the same way. Both sides go through datetime() so
 		// a value that reached the column in some other shape still compares
 		// correctly.
-		where += ` AND datetime(updated_at) <= datetime(?)`
+		where += ` AND datetime(COALESCE(updated_at, created_at)) <= datetime(?)`
 		args = append(args, time.Now().UTC().Add(-options.Older).Format(sqlTimeLayout))
 	}
 	query := `SELECT ` + ticketColumns + ` FROM tickets
 			 WHERE ` + where + `
-			 ORDER BY datetime(updated_at) ASC, id ASC`
+			 ORDER BY datetime(COALESCE(updated_at, created_at)) ASC, id ASC`
 	if options.Limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, options.Limit)

@@ -11,7 +11,7 @@ It calls the same `internal/tix` library functions the CLI uses, and talks to th
 | Tool             | Description                                                        |
 | ---------------- | ------------------------------------------------------------------- |
 | `tix_add`        | Create a new ticket in an existing project (`create: true` makes a new one). |
-| `tix_add_batch`  | Create several tickets in one project in a single call.            |
+| `tix_add_batch`  | Create several tickets, including epic/child trees, in one call.   |
 | `tix_list`       | List tickets in a project, optionally filtered by status/priority. |
 | `tix_search`     | Find a project's tickets by a term in the title or body.           |
 | `tix_show`       | Show a single ticket by id.                                        |
@@ -44,6 +44,24 @@ created 2 in tix
 84 [P1] Add tix_add_batch
 85 [P2] Document the batch tool
 ```
+
+To create an epic with subtasks, put the epic first and give each child its
+zero-based `parent_index` in the batch. This avoids a second call just to learn
+the epic's generated database id:
+
+```json
+{
+  "project": "tix",
+  "tickets": [
+    { "title": "Improve epic workflows", "body": "Parent ticket." },
+    { "title": "Support MCP epic creation", "body": "Child ticket.", "parent_index": 0 },
+    { "title": "Add web drag and drop", "body": "Child ticket.", "parent_index": 0 }
+  ]
+}
+```
+
+`parent_index` must point to an earlier item, which keeps the batch order
+unambiguous and prevents cycles.
 
 A batch is validated whole before anything is written, so a missing title in the fifth ticket rejects the call naming `tickets[4]` and leaves no half-written batch behind — and no newly created project either, even with `create: true`. If a write does fail partway (a database error rather than bad input), the error says how many tickets already landed and the payload still lists them, so the retry can skip those instead of duplicating them.
 

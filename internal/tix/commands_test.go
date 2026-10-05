@@ -153,6 +153,35 @@ func TestAddListNextAndProjectIsolation(t *testing.T) {
 	}
 }
 
+func TestReadsNullUpdatedAtAsCreatedAt(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	id, err := Add("legacy ticket", "", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE tickets SET updated_at = NULL WHERE id = ?`, id); err != nil {
+		t.Fatalf("clear updated_at: %v", err)
+	}
+
+	ticket, err := Show(int(id))
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	if !ticket.UpdatedAt.Equal(ticket.CreatedAt) {
+		t.Errorf("updated_at = %v, want created_at %v", ticket.UpdatedAt, ticket.CreatedAt)
+	}
+
+	stale, err := StaleTickets(StaleOptions{Project: "acme", Status: "open"})
+	if err != nil {
+		t.Fatalf("StaleTickets: %v", err)
+	}
+	if len(stale) != 1 || stale[0].ID != int(id) {
+		t.Errorf("StaleTickets = %#v, want ticket %d", stale, id)
+	}
+}
+
 func TestDoneFiltersOpenListAndNext(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")

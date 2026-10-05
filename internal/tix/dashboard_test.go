@@ -96,6 +96,37 @@ func TestBuildDashboardUsesPrefixedRefs(t *testing.T) {
 	}
 }
 
+func TestBuildDashboardIdentifiesEpics(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	epicID, err := Add("release", "", 1, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add epic: %v", err)
+	}
+	epic := int(epicID)
+	if _, err := Add("unrelated", "", 1, "acme", nil); err != nil {
+		t.Fatalf("Add unrelated: %v", err)
+	}
+	if _, err := Add("ship binary", "", 2, "acme", &epic); err != nil {
+		t.Fatalf("Add child: %v", err)
+	}
+
+	board, err := BuildDashboard()
+	if err != nil {
+		t.Fatalf("BuildDashboard: %v", err)
+	}
+	if !board.Projects[0].Tickets[0].IsEpic {
+		t.Fatalf("parent ticket is not marked as an epic: %+v", board.Projects[0].Tickets[0])
+	}
+	if got := []string{board.Projects[0].Tickets[0].Title, board.Projects[0].Tickets[1].Title}; !reflect.DeepEqual(got, []string{"release", "ship binary"}) {
+		t.Fatalf("epic hierarchy order = %v, want parent followed by child", got)
+	}
+	if board.Projects[0].Tickets[1].IsEpic {
+		t.Fatalf("leaf child is marked as an epic: %+v", board.Projects[0].Tickets[1])
+	}
+}
+
 // A project created ahead of its first ticket is still part of the cross-repo
 // picture: "nothing filed here yet" is information.
 func TestBuildDashboardKeepsEmptyProjects(t *testing.T) {

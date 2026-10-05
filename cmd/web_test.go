@@ -80,6 +80,14 @@ func TestWebHandlerRendersEveryProject(t *testing.T) {
 	if _, err := tix.Add("deploy app", "waiting on login", 1, "acme", nil, int(login)); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
+	epicID, err := tix.Add("release epic", "", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add epic: %v", err)
+	}
+	epic := int(epicID)
+	if _, err := tix.Add("release child", "", 2, "acme", &epic); err != nil {
+		t.Fatalf("Add child: %v", err)
+	}
 	if _, err := tix.Add("tune cache", "", 2, "zen", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -94,18 +102,23 @@ func TestWebHandlerRendersEveryProject(t *testing.T) {
 
 	body := recorder.Body.String()
 	for _, want := range []string{
-		"fix login",           // a ticket title
-		"users cannot log in", // its body, available to expand and to search
-		"deploy app",          // a dependent ticket
-		"deps 1",              // visible dependency indicator
-		"blocked",             // every present status is shown, not just the core three
-		`data-project="acme"`, // the project filter hooks
-		`data-project="zen"`,  // including the project with no repo path
-		"ac-1",                // the prefixed ref, not the bare row id
-		"/src/acme",           // where the project's code lives
-		`data-status="open"`,  // the status filter hooks
-		`data-priority="0"`,   // the priority filter hooks
-		"/api/dashboard",      // the JSON view the page polls
+		"fix login",                         // a ticket title
+		"users cannot log in",               // its body, available to expand and to search
+		"deploy app",                        // a dependent ticket
+		"deps 1",                            // visible dependency indicator
+		`class="kind-badge"`,                // epics are called out explicitly
+		`class="kind-badge child"`,          // child tickets are labeled as well as indented
+		`data-parent-id=`,                   // the hierarchy is available to styling and scripts
+		`draggable="true"`,                  // tickets can be dragged onto an epic/parent
+		"Drag a ticket onto another ticket", // the interaction is discoverable
+		"blocked",                           // every present status is shown, not just the core three
+		`data-project="acme"`,               // the project filter hooks
+		`data-project="zen"`,                // including the project with no repo path
+		"ac-1",                              // the prefixed ref, not the bare row id
+		"/src/acme",                         // where the project's code lives
+		`data-status="open"`,                // the status filter hooks
+		`data-priority="0"`,                 // the priority filter hooks
+		"/api/dashboard",                    // the JSON view the page polls
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("page is missing %q", want)
@@ -289,6 +302,28 @@ func TestWebEditTicketHandlerUpdatesFields(t *testing.T) {
 	}
 	if ticket.Title != newTitle || ticket.Body != newBody || ticket.Status != newStatus || ticket.Priority != newPriority {
 		t.Fatalf("ticket = %+v, want updated fields", ticket)
+	}
+}
+
+func TestWebEditTicketHandlerMakesTicketAChild(t *testing.T) {
+	setupWebDB(t)
+	if _, err := tix.CreateProject(tix.Project{Name: "acme"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	parentID, _ := tix.Add("release", "", 1, "acme", nil)
+	childID, _ := tix.Add("build", "", 2, "acme", nil)
+	parent := int(parentID)
+
+	recorder := do(t, webTestMux(), http.MethodPatch, fmt.Sprintf("/api/tickets/%d", childID), webEditTicketRequest{ParentID: &parent})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	ticket, err := tix.Show(int(childID))
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	if ticket.ParentID == nil || *ticket.ParentID != parent {
+		t.Fatalf("ParentID = %v, want %d", ticket.ParentID, parent)
 	}
 }
 

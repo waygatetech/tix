@@ -145,12 +145,27 @@
   tbody tr:last-child { border-bottom: none; }
   tbody tr.ticket { cursor: pointer; }
   tbody tr.ticket:hover { background: var(--panel-alt); }
+  tbody tr.ticket[draggable="true"] { cursor: grab; }
+  tbody tr.ticket.dragging { opacity: .45; }
+  tbody tr.ticket.drop-target { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--accent-soft); }
   td { padding: .5rem .95rem; vertical-align: baseline; }
   td.ref { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; color: var(--muted); white-space: nowrap; width: 1%; }
   td.pri { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; color: var(--muted); white-space: nowrap; width: 1%; }
   td.state { width: 1%; white-space: nowrap; }
   td.title { width: 100%; }
+  tr.epic td.title { font-weight: 650; }
+  tr.child td.ref { padding-left: 2rem; position: relative; }
+  tr.child td.ref::before {
+    content: "↳"; position: absolute; left: .85rem; color: var(--faint);
+  }
   .ticket .caret { color: var(--faint); font-size: .7rem; margin-left: .4rem; }
+  .kind-badge {
+    display: inline-block; margin-left: .45rem; padding: .05rem .4rem;
+    border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+    font-size: .68rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .04em; vertical-align: .08rem; white-space: nowrap;
+  }
+  .kind-badge.child { color: var(--muted); background: var(--panel-alt); border: 1px solid var(--border); }
   .dep-badge {
     display: inline-block; margin-left: .45rem; padding: .05rem .4rem;
     border: 1px solid var(--border); border-radius: 999px;
@@ -284,8 +299,10 @@
     <table>
       <tbody>
         {{range .Tickets}}
-        <tr class="ticket{{if eq .Status "done"}} done{{end}}"
+        <tr class="ticket{{if eq .Status "done"}} done{{end}}{{if .IsEpic}} epic{{end}}{{if .ParentID}} child{{end}}"
             data-id="{{.ID}}"
+            draggable="true" title="Drag onto another ticket to make this a child"
+            {{if .ParentID}}data-parent-id="{{.ParentID}}"{{end}}
             data-status="{{.Status}}"
             data-priority="{{.Priority}}"
             data-text="{{.Ref}} {{.Title}} {{.Body}}">
@@ -294,6 +311,8 @@
           <td class="state"><span class="status status-{{.Status | statusClass}}">{{.Status | label}}</span></td>
           <td class="title">
             {{.Title}}
+            {{if .IsEpic}}<span class="kind-badge" title="This ticket groups child tickets">epic</span>{{end}}
+            {{if .ParentID}}<span class="kind-badge child" title="Child of ticket {{.ParentID}}">child</span>{{end}}
             {{if .DependsOnIDs}}
             <span class="dep-badge{{if .BlockedByIDs}} blocked{{end}}" title="Depends on {{.DependsOnIDs}}">
               deps {{len .DependsOnIDs}}{{if .BlockedByIDs}} / blocked {{len .BlockedByIDs}}{{end}}
@@ -324,6 +343,7 @@
 </main>
 
 <footer>
+  Drag a ticket onto another ticket in the same project to make it a child. ·
   Reading <code>{{.DBPath}}</code> · JSON at <a href="/api/dashboard">/api/dashboard</a>
 </footer>
 {{else}}
@@ -519,6 +539,47 @@
       var body = row.nextElementSibling;
       body.hidden = !body.hidden;
       row.querySelector(".caret").textContent = body.hidden ? "▸" : "▾";
+    });
+  });
+
+  // Drag a ticket onto another ticket in the same project to make it a child.
+  // The server still enforces project boundaries and prevents parent cycles.
+  var dragged = null;
+  rows.forEach(function (row) {
+    row.addEventListener("dragstart", function (e) {
+      dragged = row;
+      row.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", row.dataset.id);
+    });
+    row.addEventListener("dragend", function () {
+      row.classList.remove("dragging");
+      rows.forEach(function (candidate) { candidate.classList.remove("drop-target"); });
+      dragged = null;
+    });
+    row.addEventListener("dragover", function (e) {
+      if (!dragged || dragged === row || dragged.closest(".project") !== row.closest(".project")) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      row.classList.add("drop-target");
+    });
+    row.addEventListener("dragleave", function () { row.classList.remove("drop-target"); });
+    row.addEventListener("drop", function (e) {
+      e.preventDefault();
+      row.classList.remove("drop-target");
+      if (!dragged || dragged === row) return;
+      var childID = dragged.dataset.id;
+      fetch("/api/tickets/" + childID, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parent_id: parseInt(row.dataset.id, 10) })
+      }).then(function (res) {
+        if (!res.ok) return apiError(res);
+        location.reload();
+      }).catch(function (err) {
+        banner.textContent = "Could not move ticket: " + err.message;
+        banner.hidden = false;
+      });
     });
   });
 

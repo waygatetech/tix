@@ -37,7 +37,9 @@ func NewServer(version string) *mcp.Server {
 		Name: "tix_add_batch",
 		Description: "Create several tickets in one project in a single call. Use this " +
 			"instead of repeated tix_add whenever a session produces more than one " +
-			"ticket. The project must already exist; call tix_projects to see the " +
+			"ticket. A ticket can name an earlier ticket in the batch as its parent " +
+			"with parent_index, making it easy to create an epic and its subtasks. " +
+			"The project must already exist; call tix_projects to see the " +
 			"names, or pass create=true to make a new one.",
 	}, addBatchTool)
 
@@ -221,9 +223,10 @@ func resolveProject(name string, create bool) (string, error) {
 }
 
 type batchTicket struct {
-	Title    string `json:"title" jsonschema:"the ticket title"`
-	Body     string `json:"body" jsonschema:"the ticket body/description"`
-	Priority *int   `json:"priority,omitempty" jsonschema:"priority 0-5, lower is more urgent (default 2)"`
+	Title       string `json:"title" jsonschema:"the ticket title"`
+	Body        string `json:"body" jsonschema:"the ticket body/description"`
+	Priority    *int   `json:"priority,omitempty" jsonschema:"priority 0-5, lower is more urgent (default 2)"`
+	ParentIndex *int   `json:"parent_index,omitempty" jsonschema:"zero-based index of an earlier ticket in this batch to use as this ticket's parent (epic)"`
 }
 
 type addBatchArgs struct {
@@ -248,6 +251,9 @@ func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) 
 		if ticket.Body == "" {
 			return nil, nil, fmt.Errorf("tickets[%d]: body is required", i)
 		}
+		if ticket.ParentIndex != nil && (*ticket.ParentIndex < 0 || *ticket.ParentIndex >= i) {
+			return nil, nil, fmt.Errorf("tickets[%d]: parent_index must identify an earlier ticket in the batch", i)
+		}
 	}
 	project, err := resolveProject(args.Project, args.Create)
 	if err != nil {
@@ -255,9 +261,15 @@ func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) 
 	}
 
 	lines := make([]string, 0, len(args.Tickets))
+	ids := make([]int, 0, len(args.Tickets))
 	for i, ticket := range args.Tickets {
 		priority := normalizePriority(ticket.Priority)
-		id, err := tix.Add(ticket.Title, ticket.Body, priority, project, nil)
+		var parentID *int
+		if ticket.ParentIndex != nil {
+			parent := ids[*ticket.ParentIndex]
+			parentID = &parent
+		}
+		id, err := tix.Add(ticket.Title, ticket.Body, priority, project, parentID)
 		if err != nil {
 			// Name what did land so the caller can retry the rest instead of
 			// re-sending the whole batch and duplicating tickets. The ids go in
@@ -265,6 +277,7 @@ func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) 
 			return nil, nil, fmt.Errorf("add failed for tickets[%d] (%d of %d already created: %s): %w",
 				i, len(lines), len(args.Tickets), strings.Join(lines, "; "), err)
 		}
+		ids = append(ids, int(id))
 		lines = append(lines, ticketLine(int(id), priority, ticket.Title))
 	}
 	return textResult(fmt.Sprintf("created %d in %s\n%s", len(lines), project, strings.Join(lines, "\n"))), nil, nil

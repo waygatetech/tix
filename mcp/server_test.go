@@ -193,6 +193,37 @@ func TestAddBatchCreatesEveryTicket(t *testing.T) {
 	}
 }
 
+func TestAddBatchCreatesEpicWithChildren(t *testing.T) {
+	setupTestDB(t)
+
+	_, _, err := addBatchTool(context.Background(), nil, addBatchArgs{
+		Project: "acme",
+		Create:  true,
+		Tickets: []batchTicket{
+			{Title: "release", Body: "epic"},
+			{Title: "build", Body: "child", ParentIndex: ptr(0)},
+			{Title: "ship", Body: "child", ParentIndex: ptr(0)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("addBatchTool: %v", err)
+	}
+
+	tickets, err := tix.ListTickets(tix.ListOptions{Project: "acme", ShowAll: true})
+	if err != nil {
+		t.Fatalf("ListTickets: %v", err)
+	}
+	if len(tickets) != 3 {
+		t.Fatalf("got %d tickets, want 3", len(tickets))
+	}
+	parent := tickets[0].ID
+	for _, child := range tickets[1:] {
+		if child.ParentID == nil || *child.ParentID != parent {
+			t.Fatalf("ticket %q parent = %v, want %d", child.Title, child.ParentID, parent)
+		}
+	}
+}
+
 func TestAddBatchRejectsBadBatchWholesale(t *testing.T) {
 	setupTestDB(t)
 
@@ -231,6 +262,13 @@ func TestAddBatchRejectsBadBatchWholesale(t *testing.T) {
 				{Title: "no body"},
 			}},
 			want: "tickets[1]: body is required",
+		},
+		{
+			name: "parent is not earlier",
+			args: addBatchArgs{Project: "batch", Create: true, Tickets: []batchTicket{
+				{Title: "epic", Body: "b", ParentIndex: ptr(0)},
+			}},
+			want: "parent_index must identify an earlier ticket",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
