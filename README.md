@@ -266,6 +266,17 @@ Solo work needs none of this: without a config, everything stays in `~/.tix/tix.
 
 `tix` works well as a lightweight task queue for AI coding agents. Run `tix init-agent PROJECT` in a repo to add ready-to-use `tix` guidance to `AGENTS.md`/`CLAUDE.md`, or point an agent at `tix best-practices` for a terse cheat sheet it can follow (claim the next ticket, do the work, mark it done, repeat).
 
+For work that needs scoping, the loop grows a plan:
+
+1. **Claim** — `tix claim-next` skips tickets whose plan concepts another in-progress ticket has leased.
+2. **Scope** — check in-flight work with `tix leases` and the repo's `concepts.yaml` with `tix concepts`.
+3. **Plan** — write `plans/<key>-ID.md` with `concepts`, `new_concepts`, and `paths` frontmatter, then `tix plan ID` to index it and lease its concepts.
+4. **Approve** — if a plan hook tiers it 1 or higher, `tix plan` exits 3 until a human runs `tix approve ID`.
+5. **Implement** — change only files the plan's `paths` cover.
+6. **Done** — `tix done ID`, with `tix check ID` run first (ideally from a done hook) to reject a diff outside the plan.
+
+The guidance stays short on purpose: the commands and hooks enforce the rules.
+
 `tix` also ships an MCP server as the `tix mcp` subcommand, so agents like Claude Desktop can call ticket operations directly as tools instead of shelling out to the CLI. No extra binary to install — see [mcp/README.md](mcp/README.md).
 
 ### Token cost: CLI vs. MCP
@@ -278,10 +289,10 @@ Measured against the current tool set:
 | --- | --- | --- |
 | `tix mcp` | 6 tool schemas + server instructions | 3,955 bytes ≈ **870 tokens**, every session |
 | `tix` CLI | none | **0 tokens** |
-| `tix init-agent` block | guidance in `AGENTS.md` / `CLAUDE.md` | 726 bytes ≈ **200 tokens**, only for agents that read those files |
+| `tix init-agent` block | guidance in `AGENTS.md` / `CLAUDE.md` | 1,206 bytes ≈ **330 tokens**, only for agents that read those files |
 | `tix best-practices` | printed on demand | 488 bytes ≈ **120 tokens**, only when the agent asks |
 
-So the CLI path costs roughly 200 tokens for an agent that reads `AGENTS.md`, against about 870 tokens of standing overhead for the MCP path — and the CLI's cost is content the agent would need anyway, not schema.
+So the CLI path costs roughly 330 tokens for an agent that reads `AGENTS.md`, against about 870 tokens of standing overhead for the MCP path — and the CLI's cost is content the agent would need anyway, not schema.
 
 The MCP figure was 6,052 bytes ≈ 1,354 tokens until the tools stopped declaring output schemas and stopped returning every payload twice (once as text, once as `structuredContent`); replies shrank with it, a five-ticket listing from 1,440 bytes to 328. See [mcp/README.md](mcp/README.md#replies-are-one-block-of-plain-text).
 

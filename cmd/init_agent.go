@@ -67,16 +67,19 @@ func tixWorkflowSection(project, dbPath string) string {
 Use `+"`TIX_DB=%s tix`"+`.
 
 - Start work with `+"`tix claim-next --project %s`"+`.
+- Scope it: see in-flight work with `+"`tix leases --project %s`"+` and the registry with `+"`tix concepts --project %s`"+`.
+- Write `+"`plans/<key>-ID.md`"+` (concepts, new_concepts, paths) and index it with `+"`tix plan ID`"+`; exit 3 means it awaits a human `+"`tix approve ID`"+`.
+- Change only files the plan's paths cover; `+"`tix check ID`"+` lists violations.
 - Fetch full details only when needed with `+"`tix show ID`"+`.
 - List narrow backlogs with `+"`tix list --project %s --status open --limit 10`"+`.
 - Check for one that already exists with `+"`tix search --project %s TERM`"+` before filing.
 - Add follow-up tickets with `+"`tix add --project %s --body-file PATH --priority N TITLE`"+`.
-- After verification, close work with `+"`tix done ID`"+`.
+- After verification, close work with `+"`tix done ID`"+` (run `+"`tix check ID`"+` first unless a done hook does).
 - Use the project name `+"`%s`"+` verbatim: an unknown `+"`--project`"+` is rejected, and a new project needs `+"`tix projects add NAME`"+` or `+"`--create`"+`.
 - Read the plain text output: it is shorter than JSON for every command. Add `+"`--json`"+` (with `+"`--compact`"+`/`+"`--fields`"+`) only when a program parses the result.
 
 %s
-`, tixWorkflowStart, dbPath, project, project, project, project, project, tixWorkflowEnd)
+`, tixWorkflowStart, dbPath, project, project, project, project, project, project, project, tixWorkflowEnd)
 }
 
 func appendTixWorkflow(path, section string) (string, error) {
