@@ -2,6 +2,7 @@ package tix
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -249,5 +250,75 @@ func TestPlanLeases(t *testing.T) {
 		if ticket.ID == rival && !reflect.DeepEqual(ticket.Leases, []string{"auth", "billing"}) {
 			t.Fatalf("stale rival Leases = %v", ticket.Leases)
 		}
+	}
+}
+
+func TestPlanConceptRegistry(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	if _, err := CreateProject(Project{Name: "frontend", Key: "fe", RepoPath: repo}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	id64, err := Add("plan me", "", 1, "frontend", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	id := int(id64)
+	ref := FormatID("fe", id)
+	planPath := filepath.Join(repo, "plan.md")
+	index := func(front string) error {
+		if err := os.WriteFile(planPath, []byte("---\nticket: "+ref+"\n"+front+"---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := IndexPlan(context.Background(), id, planPath)
+		return err
+	}
+
+	if err := index("concepts: [anything]\n"); err != nil {
+		t.Fatalf("without a registry, IndexPlan() = %v, want skipped validation", err)
+	}
+	if _, err := Concepts("frontend"); !errors.Is(err, ErrNoRegistry) {
+		t.Fatalf("Concepts() without registry = %v, want ErrNoRegistry", err)
+	}
+
+	registry := "auth:\n  owner: team-a\n  module: internal/auth\nbilling:\n"
+	if err := os.WriteFile(filepath.Join(repo, conceptsFile), []byte(registry), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		front   string
+		wantErr string
+	}{
+		{"registered", "concepts: [auth, billing]\n", ""},
+		{"unregistered", "concepts: [auth, authn]\n", "concepts not in concepts.yaml: authn"},
+		{"declared new", "concepts: [auth]\nnew_concepts: [authn]\n", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := index(tc.front)
+			if tc.wantErr == "" && err != nil {
+				t.Fatalf("IndexPlan(): %v", err)
+			}
+			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("IndexPlan() error = %v, want containing %q", err, tc.wantErr)
+			}
+		})
+	}
+
+	if _, err := db.Exec(`UPDATE tickets SET status = 'in_progress' WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Concepts("frontend")
+	if err != nil {
+		t.Fatalf("Concepts: %v", err)
+	}
+	want := []Concept{
+		{Name: "auth", Owner: "team-a", Module: "internal/auth", LeasedBy: []int{id}},
+		{Name: "billing"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Concepts() = %+v, want %+v", got, want)
 	}
 }

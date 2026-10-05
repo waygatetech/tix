@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/waygatetech/tix/internal/tix"
@@ -113,7 +115,64 @@ is in_progress, so done, rm, and returning the ticket to open release it.`,
 	},
 }
 
+var conceptsCmd = &cobra.Command{
+	Use:   "concepts",
+	Short: "List the repo's concepts.yaml registry with active leases",
+	Long: `List the concepts in concepts.yaml under the project's repo_path, with the
+owner and module of each and the in_progress tickets leasing it.
+
+tix plan rejects a plan concept missing from the registry unless the plan lists
+it in new_concepts. Without a concepts.yaml, validation is skipped.`,
+	Args:              cobra.NoArgs,
+	PersistentPreRunE: initDB,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		scope, err := projectScope()
+		if err != nil {
+			return err
+		}
+		concepts, err := tix.Concepts(scope)
+		if errors.Is(err, tix.ErrNoRegistry) {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return printJSON(concepts, compactOutput, fieldsOutput)
+		}
+		prefixes, err := tix.Prefixes()
+		if err != nil {
+			return err
+		}
+		resolved, err := tix.ResolveProject(scope)
+		if err != nil {
+			return err
+		}
+		for _, c := range concepts {
+			line := c.Name
+			if c.Owner != "" {
+				line += " owner=" + c.Owner
+			}
+			if c.Module != "" {
+				line += " module=" + c.Module
+			}
+			for _, id := range c.LeasedBy {
+				line += " leased_by=" + tix.FormatID(prefixes[resolved], id)
+			}
+			fmt.Println(line)
+		}
+		return nil
+	},
+}
+
 func init() {
+	conceptsCmd.Flags().StringVarP(&project, "project", "p", "", "project name (default: the project registered for this directory)")
+	conceptsCmd.Flags().BoolVar(&jsonOutput, "json", false, "output concepts as JSON")
+	conceptsCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
+	conceptsCmd.Flags().StringVar(&fieldsOutput, "fields", "", "comma-separated JSON fields to include")
+	rootCmd.AddCommand(conceptsCmd)
+
 	leasesCmd.Flags().StringVarP(&project, "project", "p", "", "project name (default: the project registered for this directory)")
 	leasesCmd.Flags().BoolVar(&jsonOutput, "json", false, "output leases as JSON")
 	leasesCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")

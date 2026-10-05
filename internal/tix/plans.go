@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -205,6 +206,9 @@ func IndexPlan(ctx context.Context, id int, path string) (Plan, error) {
 		return Plan{}, fmt.Errorf("%s: plan is for ticket %q, not %q", path, plan.Ticket, want)
 	}
 	plan.Path = path
+	if err := validateConcepts(ticket.Project, plan); err != nil {
+		return Plan{}, fmt.Errorf("%s: %w", path, err)
+	}
 
 	hook, err := planHookPath(ticket.Project)
 	if err != nil {
@@ -311,6 +315,99 @@ func checkLeases(q sqlQueryer, ticket Ticket, prefix string, plan Plan) error {
 		}
 	}
 	return nil
+}
+
+// Concept is an entry in the repo's concepts.yaml registry. LeasedBy lists the
+// in_progress tickets whose plans hold it.
+type Concept struct {
+	Name     string `json:"name" yaml:"name"`
+	Owner    string `json:"owner,omitempty" yaml:"owner"`
+	Module   string `json:"module,omitempty" yaml:"module"`
+	LeasedBy []int  `json:"leased_by,omitempty" yaml:"-"`
+}
+
+// ErrNoRegistry means the project's repo has no concepts.yaml, so concepts go
+// unvalidated: repos adopt the registry when they are ready.
+var ErrNoRegistry = errors.New("no " + conceptsFile + " registry")
+
+// readRegistry loads concepts.yaml from the project's repo_path.
+func readRegistry(project string) ([]Concept, error) {
+	repo, err := repoPathFor(project)
+	if err != nil {
+		return nil, err
+	}
+	if repo == "" {
+		return nil, fmt.Errorf("project %q has no repo_path: %w", project, ErrNoRegistry)
+	}
+	path := filepath.Join(repo, conceptsFile)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%s: %w", repo, ErrNoRegistry)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	concepts, err := parseConcepts(data)
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	return concepts, nil
+}
+
+// validateConcepts rejects plan concepts the registry does not define, which
+// catches a plan naming an existing thing differently. Names in new_concepts
+// are exempt: the plan is adding them.
+func validateConcepts(project string, plan Plan) error {
+	registry, err := readRegistry(project)
+	if errors.Is(err, ErrNoRegistry) {
+		fmt.Fprintf(os.Stderr, "warning: %v; skipping concept validation\n", err)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	known := map[string]bool{}
+	for _, c := range registry {
+		known[c.Name] = true
+	}
+	for _, c := range plan.NewConcepts {
+		known[c] = true
+	}
+	var unknown []string
+	for _, c := range plan.Concepts {
+		if !known[c] {
+			unknown = append(unknown, c)
+		}
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("concepts not in %s: %s; use a registered name (tix concepts) or list it in new_concepts",
+			conceptsFile, strings.Join(unknown, ", "))
+	}
+	return nil
+}
+
+// Concepts lists the project's registry with each concept's active leases.
+func Concepts(project string) ([]Concept, error) {
+	project, err := ResolveProject(project)
+	if err != nil {
+		return nil, err
+	}
+	concepts, err := readRegistry(project)
+	if err != nil {
+		return nil, err
+	}
+	leases, err := queryLeases(db, project)
+	if err != nil {
+		return nil, err
+	}
+	for i := range concepts {
+		for _, lease := range leases {
+			if lease.Concept == concepts[i].Name {
+				concepts[i].LeasedBy = append(concepts[i].LeasedBy, lease.TicketID)
+			}
+		}
+	}
+	return concepts, nil
 }
 
 // Approve records a human's sign-off on a plan awaiting review.

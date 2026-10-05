@@ -196,41 +196,59 @@ func undeclaredConcepts(before, after []byte, declared []string) ([]string, erro
 	return undeclared, nil
 }
 
-// conceptNames reads a registry that is a map keyed by concept, or a list of
-// names or of entries with a name field, optionally under a top-level
-// "concepts" key.
+// conceptNames is the set of names a registry defines.
 func conceptNames(data []byte) (map[string]bool, error) {
+	concepts, err := parseConcepts(data)
+	if err != nil {
+		return nil, err
+	}
 	names := map[string]bool{}
+	for _, c := range concepts {
+		names[c.Name] = true
+	}
+	return names, nil
+}
+
+// parseConcepts reads a registry that is a map keyed by concept, or a list of
+// names or of entries with a name field, optionally under a top-level
+// "concepts" key. Entries keep their file order.
+func parseConcepts(data []byte) ([]Concept, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, err
 	}
 	if len(doc.Content) == 0 {
-		return names, nil
+		return nil, nil
 	}
 	node := doc.Content[0]
 	if node.Kind == yaml.MappingNode && len(node.Content) == 2 && node.Content[0].Value == "concepts" {
 		node = node.Content[1]
 	}
+	var concepts []Concept
 	switch node.Kind {
 	case yaml.MappingNode:
 		for i := 0; i < len(node.Content); i += 2 {
-			names[node.Content[i].Value] = true
+			var c Concept
+			if value := node.Content[i+1]; value.Kind == yaml.MappingNode {
+				if err := value.Decode(&c); err != nil {
+					return nil, fmt.Errorf("line %d: %w", value.Line, err)
+				}
+			}
+			c.Name = node.Content[i].Value
+			concepts = append(concepts, c)
 		}
 	case yaml.SequenceNode:
 		for _, item := range node.Content {
 			if item.Kind == yaml.ScalarNode {
-				names[item.Value] = true
+				concepts = append(concepts, Concept{Name: item.Value})
 				continue
 			}
-			var entry struct {
-				Name string `yaml:"name"`
-			}
-			if err := item.Decode(&entry); err != nil || entry.Name == "" {
+			var c Concept
+			if err := item.Decode(&c); err != nil || c.Name == "" {
 				return nil, fmt.Errorf("line %d: concept entry has no name", item.Line)
 			}
-			names[entry.Name] = true
+			concepts = append(concepts, c)
 		}
 	}
-	return names, nil
+	return concepts, nil
 }
