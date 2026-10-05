@@ -317,6 +317,9 @@ func TestMigrateUpgradesPreMigrationDatabase(t *testing.T) {
 	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN parent_id`); err != nil {
 		t.Fatalf("drop parent_id: %v", err)
 	}
+	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN plan`); err != nil {
+		t.Fatalf("drop plan: %v", err)
+	}
 	if _, err := db.Exec(`PRAGMA user_version = 0`); err != nil {
 		t.Fatalf("reset user_version: %v", err)
 	}

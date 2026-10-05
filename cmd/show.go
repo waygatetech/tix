@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -69,6 +70,16 @@ var showCmd = &cobra.Command{
 				fmt.Printf("  %s%s [P%d] %s\n", marker, tix.FormatID(prefix, dep.ID), dep.Priority, dep.Title)
 			}
 		}
+		if plan := ticket.Plan; plan != nil {
+			fmt.Printf("plan: %s\n", plan.Path)
+			printPlanList("concepts", plan.Concepts)
+			printPlanList("new concepts", plan.NewConcepts)
+			printPlanList("paths", plan.Paths)
+			printPlanList("contracts changed", plan.ContractsChanged)
+			for _, d := range plan.Decisions {
+				fmt.Printf("  decision: %s (recommend %s)\n", d.Q, d.Recommend)
+			}
+		}
 		if ticket.Body != "" {
 			fmt.Println(ticket.Body)
 		}
@@ -89,6 +100,13 @@ var showCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+// printPlanList prints one plan field on a line, skipping it when empty.
+func printPlanList(label string, items []string) {
+	if len(items) > 0 {
+		fmt.Printf("  %s: %s\n", label, strings.Join(items, ", "))
+	}
 }
 
 func init() {

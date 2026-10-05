@@ -28,6 +28,9 @@ type Ticket struct {
 	DependsOnIDs []int `json:"depends_on,omitempty"`
 	// BlockedByIDs is the unfinished subset of DependsOnIDs.
 	BlockedByIDs []int `json:"blocked_by,omitempty"`
+	// Plan is the cached frontmatter of the ticket's repo plan, loaded by Show
+	// only; nil when no plan has been indexed.
+	Plan *Plan `json:"plan,omitempty"`
 	// CreatedAt and UpdatedAt are stored UTC, and UpdatedAt moves on every
 	// write, so how long a ticket has sat in its current status is answerable.
 	CreatedAt time.Time `json:"created_at"`
@@ -849,6 +852,9 @@ func Show(id int) (Ticket, error) {
 	}
 	ticket.DependsOnIDs = dependsOn
 	ticket.BlockedByIDs = blockedBy
+	if ticket.Plan, err = planFor(ticket.ID); err != nil {
+		return Ticket{}, err
+	}
 	return ticket, nil
 }
 

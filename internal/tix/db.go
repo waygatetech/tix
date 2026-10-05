@@ -269,6 +269,10 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS jev_evaluations_ticket_id
 		ON jev_evaluations(ticket_id, created_at);`,
+	// plan caches a repo plan's parsed frontmatter as JSON, so plan-driven
+	// features can query concepts and paths without reading the repo. The
+	// plan file itself stays canonical; NULL means none has been indexed.
+	`ALTER TABLE tickets ADD COLUMN plan TEXT;`,
 }
 
 // migrate applies every migration the database has not seen yet. The version
