@@ -322,3 +322,21 @@ func TestPlanConceptRegistry(t *testing.T) {
 		t.Fatalf("Concepts() = %+v, want %+v", got, want)
 	}
 }
+
+func TestInitRegistry(t *testing.T) {
+	dir := t.TempDir()
+	path, err := InitRegistry(dir)
+	if err != nil {
+		t.Fatalf("InitRegistry: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if concepts, err := parseConcepts(data); err != nil || len(concepts) != 0 {
+		t.Fatalf("parseConcepts(template) = %v, %v; want empty", concepts, err)
+	}
+	if _, err := InitRegistry(dir); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("second InitRegistry() = %v, want already exists", err)
+	}
+}

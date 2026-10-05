@@ -386,6 +386,35 @@ func validateConcepts(project string, plan Plan) error {
 	return nil
 }
 
+// InitRegistry creates an empty concepts.yaml in dir, refusing to overwrite
+// one that exists, and returns its path.
+func InitRegistry(dir string) (string, error) {
+	path := filepath.Join(dir, conceptsFile)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if errors.Is(err, os.ErrExist) {
+		return "", fmt.Errorf("%s already exists", path)
+	}
+	if err != nil {
+		return "", fmt.Errorf("creating %s: %w", path, err)
+	}
+	_, err = f.WriteString(registryTemplate)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return "", fmt.Errorf("writing %s: %w", path, err)
+	}
+	return path, nil
+}
+
+const registryTemplate = `# Concepts this repo defines. tix plan rejects plan concepts missing here
+# unless the plan lists them in new_concepts. Entries look like:
+#
+# auth:
+#   owner: team-a
+#   module: internal/auth
+`
+
 // Concepts lists the project's registry with each concept's active leases.
 func Concepts(project string) ([]Concept, error) {
 	project, err := ResolveProject(project)

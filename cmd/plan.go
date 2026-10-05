@@ -123,8 +123,9 @@ owner and module of each and the in_progress tickets leasing it.
 
 tix plan rejects a plan concept missing from the registry unless the plan lists
 it in new_concepts. Without a concepts.yaml, validation is skipped.`,
-	Args:              cobra.NoArgs,
-	PersistentPreRunE: initDB,
+	Args: cobra.NoArgs,
+	// Not persistent: concepts init needs no database.
+	PreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		scope, err := projectScope()
 		if err != nil {
@@ -166,7 +167,22 @@ it in new_concepts. Without a concepts.yaml, validation is skipped.`,
 	},
 }
 
+var conceptsInitCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Create an empty concepts.yaml in the current directory",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := tix.InitRegistry(".")
+		if err != nil {
+			return err
+		}
+		fmt.Printf("created %s\n", path)
+		return nil
+	},
+}
+
 func init() {
+	conceptsCmd.AddCommand(conceptsInitCmd)
 	conceptsCmd.Flags().StringVarP(&project, "project", "p", "", "project name (default: the project registered for this directory)")
 	conceptsCmd.Flags().BoolVar(&jsonOutput, "json", false, "output concepts as JSON")
 	conceptsCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
