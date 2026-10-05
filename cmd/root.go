@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -44,7 +45,24 @@ func initDBWithoutRepoLookup(cmd *cobra.Command, args []string) error {
 func Execute(version string) {
 	rootCmd.Version = version
 	err := rootCmd.Execute()
+	var exit exitError
+	if errors.As(err, &exit) {
+		os.Exit(exit.code)
+	}
 	if err != nil {
 		os.Exit(1)
 	}
 }
+
+// exitAwaitingReview tells an agent to stop for a human rather than treat the
+// command as failed.
+const exitAwaitingReview = 3
+
+// exitError is an error that exits with its own code instead of 1.
+type exitError struct {
+	code int
+	err  error
+}
+
+func (e exitError) Error() string { return e.err.Error() }
+func (e exitError) Unwrap() error { return e.err }

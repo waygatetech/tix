@@ -2,11 +2,13 @@ package tix
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
@@ -25,6 +27,22 @@ type Plan struct {
 	Paths            []string   `json:"paths" yaml:"paths"`
 	ContractsChanged []string   `json:"contracts_changed" yaml:"contracts_changed"`
 	Decisions        []Decision `json:"decisions" yaml:"decisions"`
+	// Review is the plan hook's ruling, set by tix rather than the file.
+	Review *Review `json:"review,omitempty" yaml:"-"`
+}
+
+// Review states. A tier 0 plan has neither: it proceeds without a ruling.
+const (
+	ReviewAwaiting = "awaiting_review"
+	ReviewApproved = "approved"
+)
+
+// Review is the tier a plan hook assigned and whether a human has ruled on it.
+// Tier policy belongs to the hook; tix only records it and blocks on tier 1+.
+type Review struct {
+	Tier   int    `json:"tier"`
+	Reason string `json:"reason,omitempty"`
+	State  string `json:"state,omitempty"`
 }
 
 // Decision is a choice the plan leaves for a human to rule on.
@@ -63,15 +81,9 @@ func ParsePlan(data []byte) (Plan, error) {
 
 // DefaultPlanPath is where a ticket's plan lives in its project's repo.
 func DefaultPlanPath(ticket Ticket) (string, error) {
-	projects, err := ListProjects()
+	repo, err := repoPathFor(ticket.Project)
 	if err != nil {
 		return "", err
-	}
-	repo := ""
-	for _, p := range projects {
-		if p.Name == ticket.Project {
-			repo = p.RepoPath
-		}
 	}
 	if repo == "" {
 		return "", fmt.Errorf("project %q has no repo_path; pass --file", ticket.Project)
@@ -83,9 +95,87 @@ func DefaultPlanPath(ticket Ticket) (string, error) {
 	return filepath.Join(repo, "plans", FormatID(prefix, ticket.ID)+".md"), nil
 }
 
-// IndexPlan parses the plan at path (or the default path when empty) and
-// replaces the ticket's cached plan with it.
-func IndexPlan(id int, path string) (Plan, error) {
+func repoPathFor(project string) (string, error) {
+	projects, err := ListProjects()
+	if err != nil {
+		return "", err
+	}
+	for _, p := range projects {
+		if p.Name == project {
+			return p.RepoPath, nil
+		}
+	}
+	return "", nil
+}
+
+// planHookPath finds the hook that tiers a project's plans: the repo's own
+// .tix/plan-hook first, then ~/.tix/plan-hook. "" means no hook, which is tier
+// 0, so review is opt-in.
+func planHookPath(project string) (string, error) {
+	var candidates []string
+	repo, err := repoPathFor(project)
+	if err != nil {
+		return "", err
+	}
+	if repo != "" {
+		candidates = append(candidates, filepath.Join(repo, tixDirName, "plan-hook"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, tixDirName, "plan-hook"))
+	}
+	for _, path := range candidates {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, nil
+		}
+	}
+	return "", nil
+}
+
+// runPlanHook sends the plan as JSON on stdin and reads back
+// {"tier": 0-2, "reason": "..."}. A failing or malformed hook is an error
+// rather than tier 0: a broken policy should not wave plans through.
+func runPlanHook(ctx context.Context, hook string, plan Plan) (Review, error) {
+	input, err := json.Marshal(plan)
+	if err != nil {
+		return Review{}, fmt.Errorf("encoding plan for hook: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, hook)
+	cmd.Stdin = bytes.NewReader(input)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return Review{}, fmt.Errorf("running plan hook %s: %w", hook, err)
+	}
+	var result struct {
+		Tier   *int   `json:"tier"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return Review{}, fmt.Errorf("parsing plan hook %s output: %w", hook, err)
+	}
+	if result.Tier == nil || *result.Tier < 0 || *result.Tier > 2 {
+		return Review{}, fmt.Errorf("plan hook %s must print a tier from 0 to 2", hook)
+	}
+	return Review{Tier: *result.Tier, Reason: result.Reason}, nil
+}
+
+// nextReview carries an approval across a re-plan only while the tier does not
+// rise; anything at tier 1+ without one waits for a human.
+func nextReview(prev *Review, got Review) *Review {
+	if got.Tier == 0 {
+		return &got
+	}
+	got.State = ReviewAwaiting
+	if prev != nil && prev.State == ReviewApproved && got.Tier <= prev.Tier {
+		got.State = ReviewApproved
+	}
+	return &got
+}
+
+// IndexPlan parses the plan at path (or the default path when empty), runs the
+// project's plan hook on it, and replaces the ticket's cached plan. The
+// returned plan's Review is awaiting_review when a human must rule first.
+func IndexPlan(ctx context.Context, id int, path string) (Plan, error) {
 	ticket, err := Show(id)
 	if err != nil {
 		return Plan{}, err
@@ -116,14 +206,53 @@ func IndexPlan(id int, path string) (Plan, error) {
 	}
 	plan.Path = path
 
-	encoded, err := json.Marshal(plan)
+	hook, err := planHookPath(ticket.Project)
 	if err != nil {
-		return Plan{}, fmt.Errorf("encoding plan: %w", err)
+		return Plan{}, err
 	}
-	if _, err := db.Exec(`UPDATE tickets SET plan = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, string(encoded), id); err != nil {
-		return Plan{}, fmt.Errorf("storing plan: %w", err)
+	got := Review{}
+	if hook != "" {
+		if got, err = runPlanHook(ctx, hook, plan); err != nil {
+			return Plan{}, err
+		}
+	}
+	var prev *Review
+	if ticket.Plan != nil {
+		prev = ticket.Plan.Review
+	}
+	plan.Review = nextReview(prev, got)
+
+	if err := storePlan(id, plan); err != nil {
+		return Plan{}, err
 	}
 	return plan, nil
+}
+
+// Approve records a human's sign-off on a plan awaiting review.
+func Approve(id int) (Plan, error) {
+	plan, err := planFor(id)
+	if err != nil {
+		return Plan{}, err
+	}
+	if plan == nil || plan.Review == nil || plan.Review.State != ReviewAwaiting {
+		return Plan{}, fmt.Errorf("ticket %d has no plan awaiting review", id)
+	}
+	plan.Review.State = ReviewApproved
+	if err := storePlan(id, *plan); err != nil {
+		return Plan{}, err
+	}
+	return *plan, nil
+}
+
+func storePlan(id int, plan Plan) error {
+	encoded, err := json.Marshal(plan)
+	if err != nil {
+		return fmt.Errorf("encoding plan: %w", err)
+	}
+	if _, err := db.Exec(`UPDATE tickets SET plan = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, string(encoded), id); err != nil {
+		return fmt.Errorf("storing plan: %w", err)
+	}
+	return nil
 }
 
 // planFor returns a ticket's cached plan, or nil when none has been indexed.
