@@ -80,7 +80,46 @@ var approveCmd = &cobra.Command{
 	},
 }
 
+var leasesCmd = &cobra.Command{
+	Use:   "leases",
+	Short: "List concepts leased by in_progress tickets' plans",
+	Long: `List the project's active concept leases.
+
+tix plan leases every concept and new_concept a plan declares, and refuses a
+plan that overlaps another in_progress ticket's. A lease lasts while its ticket
+is in_progress, so done, rm, and returning the ticket to open release it.`,
+	Args:              cobra.NoArgs,
+	PersistentPreRunE: initDB,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		scope, err := projectScope()
+		if err != nil {
+			return err
+		}
+		leases, err := tix.Leases(scope)
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			return printJSON(leases, compactOutput, fieldsOutput)
+		}
+		prefixes, err := tix.Prefixes()
+		if err != nil {
+			return err
+		}
+		for _, lease := range leases {
+			fmt.Printf("%s %s\n", lease.Concept, tix.FormatID(prefixes[lease.Project], lease.TicketID))
+		}
+		return nil
+	},
+}
+
 func init() {
+	leasesCmd.Flags().StringVarP(&project, "project", "p", "", "project name (default: the project registered for this directory)")
+	leasesCmd.Flags().BoolVar(&jsonOutput, "json", false, "output leases as JSON")
+	leasesCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
+	leasesCmd.Flags().StringVar(&fieldsOutput, "fields", "", "comma-separated JSON fields to include")
+	rootCmd.AddCommand(leasesCmd)
+
 	planCmd.Flags().StringVar(&planFile, "file", "", "plan file (default plans/<key>-<id>.md in the project's repo_path)")
 	planCmd.Flags().StringVarP(&project, "project", "p", "", "project the ticket must belong to (errors on mismatch)")
 	planCmd.Flags().BoolVar(&jsonOutput, "json", false, "output the parsed plan as JSON")

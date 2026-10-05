@@ -222,10 +222,95 @@ func IndexPlan(ctx context.Context, id int, path string) (Plan, error) {
 	}
 	plan.Review = nextReview(prev, got)
 
-	if err := storePlan(id, plan); err != nil {
+	// The lease check and the store share a transaction, so two agents
+	// planning the same concept cannot both pass the check.
+	tx, err := db.Begin()
+	if err != nil {
+		return Plan{}, fmt.Errorf("beginning plan transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := checkLeases(tx, ticket, prefix, plan); err != nil {
 		return Plan{}, err
 	}
+	if err := storePlan(tx, id, plan); err != nil {
+		return Plan{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Plan{}, fmt.Errorf("committing plan: %w", err)
+	}
 	return plan, nil
+}
+
+// Lease is a concept an in_progress ticket's plan claims within its project.
+type Lease struct {
+	Project  string `json:"project"`
+	Concept  string `json:"concept"`
+	TicketID int    `json:"ticket_id"`
+}
+
+// Leases are derived from cached plans rather than stored: a ticket holds its
+// plan's concepts and new_concepts exactly while it is in_progress, so done,
+// rm, and a return to open release them with nothing to clean up, and a
+// crashed agent's leases surface through its stale ticket.
+const leasesQuery = `
+	SELECT t.project, c.value, t.id FROM tickets t, json_each(t.plan, '$.concepts') c
+	 WHERE t.status = 'in_progress' AND t.plan IS NOT NULL AND c.value IS NOT NULL AND t.project = ?
+	UNION
+	SELECT t.project, c.value, t.id FROM tickets t, json_each(t.plan, '$.new_concepts') c
+	 WHERE t.status = 'in_progress' AND t.plan IS NOT NULL AND c.value IS NOT NULL AND t.project = ?
+	ORDER BY 2, 3`
+
+// Leases lists the project's active concept leases, by concept.
+func Leases(project string) ([]Lease, error) {
+	project, err := ResolveProject(project)
+	if err != nil {
+		return nil, err
+	}
+	return queryLeases(db, project)
+}
+
+func queryLeases(q sqlQueryer, project string) ([]Lease, error) {
+	rows, err := q.Query(leasesQuery, project, project)
+	if err != nil {
+		return nil, fmt.Errorf("listing leases: %w", err)
+	}
+	defer rows.Close()
+	var leases []Lease
+	for rows.Next() {
+		var lease Lease
+		if err := rows.Scan(&lease.Project, &lease.Concept, &lease.TicketID); err != nil {
+			return nil, fmt.Errorf("scanning lease: %w", err)
+		}
+		leases = append(leases, lease)
+	}
+	return leases, rows.Err()
+}
+
+// checkLeases fails when another in_progress ticket in the project already
+// leases a concept the plan declares.
+// prefix is the project's, resolved by the caller: the transaction q belongs
+// to holds the only connection.
+func checkLeases(q sqlQueryer, ticket Ticket, prefix string, plan Plan) error {
+	wanted := map[string]bool{}
+	for _, concepts := range [][]string{plan.Concepts, plan.NewConcepts} {
+		for _, concept := range concepts {
+			wanted[concept] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return nil
+	}
+	leases, err := queryLeases(q, ticket.Project)
+	if err != nil {
+		return err
+	}
+	for _, lease := range leases {
+		if lease.TicketID != ticket.ID && wanted[lease.Concept] {
+			return fmt.Errorf("concept %q is leased by %s in project %q; wait for it or coordinate",
+				lease.Concept, FormatID(prefix, lease.TicketID), lease.Project)
+		}
+	}
+	return nil
 }
 
 // Approve records a human's sign-off on a plan awaiting review.
@@ -238,18 +323,18 @@ func Approve(id int) (Plan, error) {
 		return Plan{}, fmt.Errorf("ticket %d has no plan awaiting review", id)
 	}
 	plan.Review.State = ReviewApproved
-	if err := storePlan(id, *plan); err != nil {
+	if err := storePlan(db, id, *plan); err != nil {
 		return Plan{}, err
 	}
 	return *plan, nil
 }
 
-func storePlan(id int, plan Plan) error {
+func storePlan(exec sqlExecer, id int, plan Plan) error {
 	encoded, err := json.Marshal(plan)
 	if err != nil {
 		return fmt.Errorf("encoding plan: %w", err)
 	}
-	if _, err := db.Exec(`UPDATE tickets SET plan = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, string(encoded), id); err != nil {
+	if _, err := exec.Exec(`UPDATE tickets SET plan = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, string(encoded), id); err != nil {
 		return fmt.Errorf("storing plan: %w", err)
 	}
 	return nil

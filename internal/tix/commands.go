@@ -31,6 +31,9 @@ type Ticket struct {
 	// Plan is the cached frontmatter of the ticket's repo plan, loaded by Show
 	// only; nil when no plan has been indexed.
 	Plan *Plan `json:"plan,omitempty"`
+	// Leases are the concepts this ticket holds, loaded by StaleTickets only so
+	// a crashed agent's claims are visible where it is recovered.
+	Leases []string `json:"leases,omitempty"`
 	// CreatedAt and UpdatedAt are stored UTC, and UpdatedAt moves on every
 	// write, so how long a ticket has sat in its current status is answerable.
 	CreatedAt time.Time `json:"created_at"`
@@ -607,7 +610,22 @@ func StaleTickets(options StaleOptions) ([]Ticket, error) {
 		query += ` LIMIT ?`
 		args = append(args, options.Limit)
 	}
-	return queryTickets(query, args...)
+	tickets, err := queryTickets(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	leases, err := queryLeases(db, project)
+	if err != nil {
+		return nil, err
+	}
+	held := map[int][]string{}
+	for _, lease := range leases {
+		held[lease.TicketID] = append(held[lease.TicketID], lease.Concept)
+	}
+	for i := range tickets {
+		tickets[i].Leases = held[tickets[i].ID]
+	}
+	return tickets, nil
 }
 
 // sqlTimeLayout is how SQLite's CURRENT_TIMESTAMP writes a time.
@@ -633,6 +651,16 @@ func FormatAge(d time.Duration) string {
 type sqlQueryer interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 }
+
+// leaseConflict matches when another in_progress ticket in the project leases
+// a concept the outer tickets row's cached plan declares. A ticket reopened
+// with its plan still cached would otherwise take its leases back on claim
+// without the check tix plan makes.
+const leaseConflict = `SELECT 1 FROM tickets holder,
+		(VALUES ('$.concepts'), ('$.new_concepts')) hp, json_each(holder.plan, hp.column1) held,
+		(VALUES ('$.concepts'), ('$.new_concepts')) wp, json_each(tickets.plan, wp.column1) wanted
+	WHERE holder.project = tickets.project AND holder.status = 'in_progress' AND holder.id != tickets.id
+		AND held.type = 'text' AND wanted.type = 'text' AND held.value = wanted.value`
 
 // nextClaimable picks the next ticket to work on. A ticket with unfinished
 // children is an epic: it is never claimed itself, and when it comes up next
@@ -663,6 +691,7 @@ func nextClaimable(q sqlQueryer, project string, parentID *int, depth int) (int,
 				WHERE td.ticket_id = tickets.id
 					AND dep.status != 'done'
 			 )
+			 AND NOT EXISTS (`+leaseConflict+`)
 			 ORDER BY priority ASC, order_rank ASC`,
 		args...,
 	)

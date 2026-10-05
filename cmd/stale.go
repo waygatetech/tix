@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -63,6 +64,9 @@ var staleCmd = &cobra.Command{
 			fmt.Printf("%s [P%d] %s (%s, idle %s)\n",
 				tix.FormatID(prefixes[ticket.Project], ticket.ID), ticket.Priority, ticket.Title,
 				ticket.Status, tix.FormatAge(now.Sub(ticket.UpdatedAt)))
+			if len(ticket.Leases) > 0 {
+				fmt.Printf("  leases: %s\n", strings.Join(ticket.Leases, ", "))
+			}
 		}
 		return nil
 	},

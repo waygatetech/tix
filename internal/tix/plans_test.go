@@ -134,3 +134,120 @@ func TestPlanHookReview(t *testing.T) {
 		})
 	}
 }
+
+func TestPlanLeases(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("HOME", t.TempDir())
+	repos := map[string]string{"frontend": t.TempDir(), "backend": t.TempDir()}
+	keys := map[string]string{"frontend": "fe", "backend": "be"}
+	for name, repo := range repos {
+		if _, err := CreateProject(Project{Name: name, Key: keys[name], RepoPath: repo}); err != nil {
+			t.Fatalf("CreateProject: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Join(repo, "plans"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add := func(project, front string) int {
+		id64, err := Add("lease me", "", 1, project, nil)
+		if err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+		id := int(id64)
+		ref := FormatID(keys[project], id)
+		plan := "---\nticket: " + ref + "\n" + front + "---\n"
+		if err := os.WriteFile(filepath.Join(repos[project], "plans", ref+".md"), []byte(plan), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE tickets SET status = 'in_progress' WHERE id = ?`, id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	holder := add("frontend", "concepts: [auth]\n")
+	rival := add("frontend", "new_concepts: [auth, billing]\n")
+	other := add("backend", "concepts: [auth]\n")
+
+	// Steps run in order; setup is SQL run against the holder first.
+	steps := []struct {
+		name    string
+		setup   string
+		id      int
+		wantErr string
+	}{
+		{"holder acquires", "", holder, ""},
+		{"holder replans its own lease", "", holder, ""},
+		{"overlap is refused", "", rival, FormatID("fe", holder)},
+		{"other project is independent", "", other, ""},
+		{"reopening releases", `UPDATE tickets SET status = 'open' WHERE id = ?`, rival, ""},
+		{"rival now holds it", `UPDATE tickets SET status = 'in_progress' WHERE id = ?`, holder, FormatID("fe", rival)},
+		{"done releases", `UPDATE tickets SET status = 'done' WHERE id = ?`, rival, ""},
+	}
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			if step.setup != "" {
+				if _, err := db.Exec(step.setup, holder); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := IndexPlan(context.Background(), step.id, "")
+			if step.wantErr == "" && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if step.wantErr != "" && (err == nil || !strings.Contains(err.Error(), step.wantErr) || !strings.Contains(err.Error(), `"frontend"`)) {
+				t.Fatalf("error = %v, want naming %s in project frontend", err, step.wantErr)
+			}
+		})
+	}
+
+	leases, err := Leases("frontend")
+	if err != nil {
+		t.Fatalf("Leases: %v", err)
+	}
+	want := []Lease{{"frontend", "auth", rival}, {"frontend", "billing", rival}}
+	if !reflect.DeepEqual(leases, want) {
+		t.Fatalf("Leases() = %v, want %v", leases, want)
+	}
+	// A reopened ticket keeps its cached plan; claim-next must pass it over
+	// while another ticket leases its concepts, then claim it once released.
+	if _, err := db.Exec(`UPDATE tickets SET status = 'open' WHERE id = ?`, holder); err != nil {
+		t.Fatal(err)
+	}
+	plain64, err := Add("no plan", "", 2, "frontend", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	for _, claim := range []struct {
+		name  string
+		setup string // SQL run against the rival first
+		want  int
+	}{
+		{"skips overlapping plan", "", int(plain64)},
+		{"claims once released", `UPDATE tickets SET status = 'done' WHERE id = ?`, holder},
+	} {
+		t.Run(claim.name, func(t *testing.T) {
+			if claim.setup != "" {
+				if _, err := db.Exec(claim.setup, rival); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := ClaimNext("frontend")
+			if err != nil || got.ID != claim.want {
+				t.Fatalf("ClaimNext() = %d, %v; want %d", got.ID, err, claim.want)
+			}
+		})
+	}
+	if _, err := db.Exec(`UPDATE tickets SET status = 'in_progress' WHERE id = ?`, rival); err != nil {
+		t.Fatal(err)
+	}
+
+	stale, err := StaleTickets(StaleOptions{Project: "frontend"})
+	if err != nil {
+		t.Fatalf("StaleTickets: %v", err)
+	}
+	for _, ticket := range stale {
+		if ticket.ID == rival && !reflect.DeepEqual(ticket.Leases, []string{"auth", "billing"}) {
+			t.Fatalf("stale rival Leases = %v", ticket.Leases)
+		}
+	}
+}
