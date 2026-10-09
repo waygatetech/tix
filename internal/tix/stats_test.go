@@ -141,3 +141,45 @@ func TestBuildStats(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildStatsInherited(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+	ids := map[string]int{}
+	for _, name := range []string{"inherited", "reviewed"} {
+		id, err := Add(name, "", 1, "acme", nil)
+		if err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+		ids[name] = int(id)
+	}
+	for _, e := range []struct {
+		ticket, event, data string
+	}{
+		{"inherited", "plan", `{"tier":0,"inherited_from":"ac-9"}`},
+		{"inherited", "done", ""},
+		{"inherited", "reopen", ""},
+		{"reviewed", "plan", `{"tier":0}`},
+		{"reviewed", "done", ""},
+	} {
+		var data any
+		if e.data != "" {
+			data = e.data
+		}
+		if _, err := db.Exec(`INSERT INTO ticket_events (ticket_id, event, data) VALUES (?, ?, ?)`, ids[e.ticket], e.event, data); err != nil {
+			t.Fatalf("insert %s: %v", e.event, err)
+		}
+	}
+
+	stats, err := BuildStats(StatsQuery{Project: "acme", By: StatsByTier})
+	if err != nil {
+		t.Fatalf("BuildStats: %v", err)
+	}
+	reopens := map[string]float64{}
+	for _, g := range stats.Groups {
+		reopens[g.Key] = g.ReopenRate
+	}
+	if want := map[string]float64{"0": 0, "inherited": 1}; !maps.Equal(reopens, want) {
+		t.Fatalf("reopen rate by tier = %v, want %v", reopens, want)
+	}
+}

@@ -117,6 +117,7 @@ func BuildStats(q StatsQuery) (Stats, error) {
 	}
 
 	// Tier is the latest plan's, so every event of a ticket lands in one tier.
+	// Plans that rode on an epic's approval get their own row.
 	states := map[int]*statsTicket{}
 	for _, e := range events {
 		if states[e.ticketID] == nil {
@@ -126,6 +127,9 @@ func BuildStats(q StatsQuery) (Stats, error) {
 			var r Review
 			if json.Unmarshal(e.data, &r) == nil {
 				states[e.ticketID].tier = strconv.Itoa(r.Tier)
+				if r.InheritedFrom != "" {
+					states[e.ticketID].tier = "inherited"
+				}
 			}
 		}
 	}

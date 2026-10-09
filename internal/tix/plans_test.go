@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -237,6 +238,115 @@ func TestHookExtensions(t *testing.T) {
 			}
 			if step.check != nil {
 				step.check()
+			}
+		})
+	}
+}
+
+func TestPlanEpic(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("the default plan hook needs jq")
+	}
+	defaultHook, err := filepath.Abs("../../hooks/plan-hook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setupTestDB(t)
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	if _, err := CreateProject(Project{Name: "frontend", Key: "fe", RepoPath: repo}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	for _, dir := range []string{"plans", ".tix"} {
+		if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The project hook saves its stdin, then defers to the default hook.
+	hook := filepath.Join(repo, ".tix", "plan-hook")
+	script := "#!/bin/sh\ntee \"$0.in\" | sh '" + defaultHook + "'\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	add := func() int {
+		id, err := Add("epic work", "", 1, "frontend", nil)
+		if err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+		// In progress, so the epic's leases are live.
+		if _, err := db.Exec(`UPDATE tickets SET status = 'in_progress' WHERE id = ?`, id); err != nil {
+			t.Fatal(err)
+		}
+		return int(id)
+	}
+	epic, child := add(), add()
+	epicRef := FormatID("fe", epic)
+	if err := os.WriteFile(filepath.Join(repo, "plans", epicRef+".md"), []byte("---\nticket: "+epicRef+
+		"\nconcepts: [auth]\nnew_concepts: [billing]\ncontracts_changed: [api]\nacceptance: [it works]\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Steps run in order against the child's plan.
+	steps := []struct {
+		name          string
+		setup         func() error
+		front         string
+		wantErr       string
+		wantTier      int
+		wantInherited string
+	}{
+		{"missing epic ticket", nil, "epic: fe-999\n", "epic fe-999", 0, ""},
+		{"own ticket as epic", nil, "epic: " + FormatID("fe", child) + "\n", "its own ticket", 0, ""},
+		{"unplanned epic", nil, "epic: " + epicRef + "\n", "no approved plan", 0, ""},
+		{"epic awaiting review", func() error {
+			_, err := IndexPlan(context.Background(), epic, "")
+			return err
+		}, "epic: " + epicRef + "\n", "no approved plan", 0, ""},
+		{"inside approved epic inherits", func() error {
+			_, err := Approve(context.Background(), epic)
+			return err
+		}, "epic: " + epicRef + "\nconcepts: [auth]\nnew_concepts: [billing]\ncontracts_changed: [api]\n", "", 0, epicRef},
+		{"outside the envelope tiers normally", nil, "epic: " + epicRef + "\nconcepts: [auth]\ncontracts_changed: [schema]\n", "", 2, ""},
+		{"own decisions tier normally", nil, "epic: " + epicRef + "\nconcepts: [auth]\ndecisions: [{q: which}]\n", "", 1, ""},
+	}
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			if step.setup != nil {
+				if err := step.setup(); err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+			}
+			ref := FormatID("fe", child)
+			plan := "---\nticket: " + ref + "\n" + step.front + "acceptance: [it works]\n---\n"
+			if err := os.WriteFile(filepath.Join(repo, "plans", ref+".md"), []byte(plan), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := IndexPlan(context.Background(), child, "")
+			if step.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), step.wantErr) {
+					t.Fatalf("error = %v, want containing %q", err, step.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("IndexPlan: %v", err)
+			}
+			if got.Review.Tier != step.wantTier || got.Review.InheritedFrom != step.wantInherited {
+				t.Fatalf("Review = %#v, want tier %d inherited from %q", got.Review, step.wantTier, step.wantInherited)
+			}
+			in, err := os.ReadFile(hook + ".in")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(in), `"epic":{`) || !strings.Contains(string(in), `"contracts_changed":["api"]`) {
+				t.Fatalf("hook stdin = %s, want the epic's frontmatter", in)
+			}
+			var event string
+			if err := db.QueryRow(`SELECT data FROM ticket_events WHERE ticket_id = ? AND event = 'plan' ORDER BY id DESC LIMIT 1`, child).Scan(&event); err != nil {
+				t.Fatal(err)
+			}
+			if step.wantInherited != "" && !strings.Contains(event, `"inherited_from":"`+step.wantInherited+`"`) {
+				t.Fatalf("plan event = %s, want inherited_from %s", event, step.wantInherited)
 			}
 		})
 	}

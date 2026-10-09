@@ -31,6 +31,9 @@ type Plan struct {
 	// Acceptance lists observable, testable statements of what done means.
 	// Tier 1+ plans must have at least one.
 	Acceptance []string `json:"acceptance" yaml:"acceptance"`
+	// Epic names an approved plan whose envelope this plan works inside. The
+	// plan hook receives that plan's frontmatter in its place.
+	Epic string `json:"epic,omitempty" yaml:"epic"`
 	// Review is the plan hook's ruling, set by tix rather than the file.
 	Review *Review `json:"review,omitempty" yaml:"-"`
 	// Extra holds frontmatter keys tix does not own. Hooks receive them; the
@@ -42,6 +45,7 @@ type Plan struct {
 var planKeys = map[string]bool{
 	"ticket": true, "concepts": true, "new_concepts": true, "paths": true,
 	"contracts_changed": true, "decisions": true, "acceptance": true,
+	"epic": true,
 }
 
 // hookInput is the plan as hooks see it: its JSON plus extension keys, with
@@ -73,6 +77,9 @@ type Review struct {
 	Tier   int    `json:"tier"`
 	Reason string `json:"reason,omitempty"`
 	State  string `json:"state,omitempty"`
+	// InheritedFrom is the epic whose approval a tier 0 plan rides on, so
+	// stats can tell skipped reviews from plans that never needed one.
+	InheritedFrom string `json:"inherited_from,omitempty"`
 }
 
 // Decision is a choice the plan leaves for a human to rule on.
@@ -197,10 +204,16 @@ func hookCmd(ctx context.Context, hook, name string, input any) ([]byte, error) 
 // runPlanHook sends the plan as JSON on stdin and reads back
 // {"tier": 0-2, "reason": "..."}. A failing or malformed hook is an error
 // rather than tier 0: a broken policy should not wave plans through.
-func runPlanHook(ctx context.Context, hook string, plan Plan) (Review, error) {
+// An epic, when the plan names one, replaces the plan's epic ref in the input.
+func runPlanHook(ctx context.Context, hook string, plan Plan, epic *Plan) (Review, error) {
 	input, err := hookInput(plan)
 	if err != nil {
 		return Review{}, err
+	}
+	if epic != nil {
+		if input["epic"], err = hookInput(*epic); err != nil {
+			return Review{}, err
+		}
 	}
 	out, err := hookCmd(ctx, hook, "plan", input)
 	if err != nil {
@@ -268,6 +281,13 @@ func IndexPlan(ctx context.Context, id int, path string) (Plan, error) {
 	if err := validateConcepts(ticket.Project, plan); err != nil {
 		return Plan{}, fmt.Errorf("%s: %w", path, err)
 	}
+	var epic *Plan
+	if plan.Epic != "" {
+		if epic, err = approvedEpic(id, plan.Epic); err != nil {
+			return Plan{}, fmt.Errorf("%s: %w", path, err)
+		}
+		plan.Epic = epic.Ticket
+	}
 
 	hook, err := planHookPath(ticket.Project)
 	if err != nil {
@@ -275,9 +295,12 @@ func IndexPlan(ctx context.Context, id int, path string) (Plan, error) {
 	}
 	got := Review{}
 	if hook != "" {
-		if got, err = runPlanHook(ctx, hook, plan); err != nil {
+		if got, err = runPlanHook(ctx, hook, plan, epic); err != nil {
 			return Plan{}, err
 		}
+	}
+	if got.Tier == 0 && epic != nil {
+		got.InheritedFrom = plan.Epic
 	}
 	var prev *Review
 	if ticket.Plan != nil {
@@ -308,6 +331,26 @@ func IndexPlan(ctx context.Context, id int, path string) (Plan, error) {
 		return Plan{}, fmt.Errorf("committing plan: %w", err)
 	}
 	return plan, nil
+}
+
+// approvedEpic loads the plan a child names as its epic. Only an approved plan
+// counts: its approval is the review the child inherits.
+func approvedEpic(childID int, ref string) (*Plan, error) {
+	epicID, err := ResolveRef(ref)
+	if err != nil {
+		return nil, fmt.Errorf("epic %s: %w", ref, err)
+	}
+	if epicID == childID {
+		return nil, errors.New("a plan cannot name its own ticket as its epic")
+	}
+	epic, err := Show(epicID)
+	if err != nil {
+		return nil, fmt.Errorf("epic %s: %w", ref, err)
+	}
+	if epic.Plan == nil || epic.Plan.Review == nil || epic.Plan.Review.State != ReviewApproved {
+		return nil, fmt.Errorf("epic %s has no approved plan; plan and approve it first", ref)
+	}
+	return epic.Plan, nil
 }
 
 // Lease is a concept an in_progress ticket's plan claims within its project.
@@ -356,7 +399,8 @@ func queryLeases(q sqlQueryer, project string) ([]Lease, error) {
 }
 
 // checkLeases fails when another in_progress ticket in the project already
-// leases a concept the plan declares.
+// leases a concept the plan declares. The plan's own epic is exempt: its
+// leases cover the work the child is carrying out.
 // prefix is the project's, resolved by the caller: the transaction q belongs
 // to holds the only connection.
 func checkLeases(q sqlQueryer, ticket Ticket, prefix string, plan Plan) error {
@@ -374,7 +418,7 @@ func checkLeases(q sqlQueryer, ticket Ticket, prefix string, plan Plan) error {
 		return err
 	}
 	for _, lease := range leases {
-		if lease.TicketID != ticket.ID && wanted[lease.Concept] {
+		if lease.TicketID != ticket.ID && wanted[lease.Concept] && FormatID(prefix, lease.TicketID) != plan.Epic {
 			return fmt.Errorf("concept %q is leased by %s in project %q; wait for it or coordinate",
 				lease.Concept, FormatID(prefix, lease.TicketID), lease.Project)
 		}

@@ -3,12 +3,21 @@
 # on stdin; this prints the review tier. Copy it to <repo>/.tix/plan-hook or
 # ~/.tix/plan-hook and edit the rules to suit the team. Requires jq.
 #
+#   tier 0: the plan stays inside its approved epic (.epic is that epic's
+#           frontmatter): no concepts or contracts beyond the epic's, and no
+#           decisions of its own
 #   tier 2: the plan adds concepts or changes contracts
 #   tier 1: the plan spans several concepts or leaves decisions open
 #   tier 0: everything else
 exec jq -c '
   def n(f): (f // []) | length;
-  if n(.new_concepts) > 0 or n(.contracts_changed) > 0 then
+  def within(a; b): ((a // []) - (b // [])) | length == 0;
+  if (.epic | type) == "object"
+     and within(.concepts + .new_concepts; .epic.concepts + .epic.new_concepts)
+     and within(.contracts_changed; .epic.contracts_changed)
+     and n(.decisions) == 0 then
+    {tier: 0, reason: ("inside approved epic " + .epic.ticket)}
+  elif n(.new_concepts) > 0 or n(.contracts_changed) > 0 then
     {tier: 2, reason: "new concepts or changed contracts"}
   elif n(.concepts) > 1 or n(.decisions) > 0 then
     {tier: 1, reason: "multiple concepts or open decisions"}
