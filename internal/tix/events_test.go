@@ -86,3 +86,40 @@ func TestEventsAreAppendOnly(t *testing.T) {
 		t.Errorf("after rm, events = %v, want the done event kept", events)
 	}
 }
+
+func TestNote(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	id, err := Add("ticket", "", 1, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		id      int
+		body    string
+		wantErr bool
+	}{
+		{"appends a note", int(id), "handoff: tests pass, docs next", false},
+		{"rejects a blank note", int(id), "  \n", true},
+		{"rejects a missing ticket", 9999, "lost", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Note(tt.id, tt.body)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Note(%d, %q) error = %v, wantErr %v", tt.id, tt.body, err, tt.wantErr)
+			}
+		})
+	}
+
+	notes, err := Notes(int(id))
+	if err != nil {
+		t.Fatalf("Notes: %v", err)
+	}
+	if len(notes) != 1 || notes[0].Body != "handoff: tests pass, docs next" {
+		t.Errorf("notes = %+v, want the one appended note", notes)
+	}
+}

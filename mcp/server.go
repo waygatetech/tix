@@ -66,6 +66,12 @@ func NewServer(version string) *mcp.Server {
 	}, editTool)
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name: "tix_note",
+		Description: "Append a timestamped handoff note to a ticket: context for whoever " +
+			"picks it up next. Notes are append-only and tix_show prints them.",
+	}, noteTool)
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tix_projects",
 		Description: "List all projects with ticket counts per status.",
 	}, projectsTool)
@@ -382,7 +388,30 @@ func showTool(_ context.Context, _ *mcp.CallToolRequest, args showArgs) (*mcp.Ca
 	if err != nil {
 		return nil, nil, err
 	}
-	return textResult(ticketDetail(ticket)), nil, nil
+	notes, err := tix.Notes(args.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	detail := ticketDetail(ticket)
+	if len(notes) > 0 {
+		detail += "\nnotes:"
+		for _, n := range notes {
+			detail += fmt.Sprintf("\n%s %s", n.At.UTC().Format(time.RFC3339), strings.TrimSpace(n.Body))
+		}
+	}
+	return textResult(detail), nil, nil
+}
+
+type noteArgs struct {
+	ID   int    `json:"id" jsonschema:"the ticket id"`
+	Body string `json:"body" jsonschema:"the note: what was done, what was decided and by whom, what's next, files touched"`
+}
+
+func noteTool(_ context.Context, _ *mcp.CallToolRequest, args noteArgs) (*mcp.CallToolResult, any, error) {
+	if err := tix.Note(args.ID, args.Body); err != nil {
+		return nil, nil, fmt.Errorf("note failed: %w", err)
+	}
+	return textResult(fmt.Sprintf("noted %d", args.ID)), nil, nil
 }
 
 type editArgs struct {

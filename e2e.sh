@@ -304,6 +304,15 @@ check "done closes the rejected ticket again" "ac-1 done" env HOME="$tmp/home" "
 check "reopen returns a done ticket to open" "reopened 1" "$tmp/tix" reopen 1 --reason "broke later"
 check "reopen records its reason" '"event":"reopen","at":' "$tmp/tix" show 1 --events --json --compact
 check "done closes the reopened ticket" "ac-1 done" env HOME="$tmp/home" "$tmp/tix" done 1
+check "note appends a handoff note" "noted 1" "$tmp/tix" note 1 "stopped at docs; next: e2e"
+printf 'decided by brian: keep it\n' > "$tmp/note.md"
+check "note reads --body-file" "noted 1" "$tmp/tix" note 1 --body-file "$tmp/note.md"
+check "show prints notes" "stopped at docs; next: e2e" "$tmp/tix" show 1
+check "show prints file notes" "decided by brian: keep it" "$tmp/tix" show 1
+check_status "note rejects an empty note" 1 "$tmp/tix" note 1
+check_status "note rejects text and --body-file together" 1 "$tmp/tix" note 1 x --body-file "$tmp/note.md"
+check_status "note rejects a mismatched --project" 1 "$tmp/tix" note 1 "nope" --project zen
+check_absent "mismatched note records nothing" "nope" "$tmp/tix" show 1
 # work that already shipped is still a duplicate, so search sees closed tickets
 # without being asked
 check "search finds a done ticket" "x ac-1" "$tmp/tix" search --project acme login

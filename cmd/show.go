@@ -99,6 +99,17 @@ var showCmd = &cobra.Command{
 		if ticket.Body != "" {
 			fmt.Println(ticket.Body)
 		}
+		notes, err := tix.Notes(id)
+		if err != nil {
+			return err
+		}
+		if len(notes) > 0 {
+			fmt.Println("notes:")
+			for _, n := range notes {
+				body := strings.ReplaceAll(strings.TrimSpace(n.Body), "\n", "\n    ")
+				fmt.Printf("  %s %s\n", formatTimestamp(n.At), body)
+			}
+		}
 
 		children, err := tix.ListTickets(tix.ListOptions{Project: ticket.Project, ShowAll: true, ParentID: &ticket.ID})
 		if err != nil {

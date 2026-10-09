@@ -389,6 +389,45 @@ func TestToolsRenderPlainText(t *testing.T) {
 	}
 }
 
+func TestNoteToolAppendsAndShowPrintsIt(t *testing.T) {
+	setupTestDB(t)
+
+	ctx := context.Background()
+	if _, _, err := addTool(ctx, nil, addArgs{Title: "fix login", Body: "it 500s", Project: "acme", Create: true}); err != nil {
+		t.Fatalf("addTool: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		args    noteArgs
+		want    string
+		wantErr bool
+	}{
+		{"appends a note", noteArgs{ID: 1, Body: "blocked on lease; next: retry"}, "noted 1", false},
+		{"rejects an empty note", noteArgs{ID: 1}, "", true},
+		{"rejects a missing ticket", noteArgs{ID: 99, Body: "x"}, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, _, err := noteTool(ctx, nil, tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("noteTool error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && resultText(t, res) != tt.want {
+				t.Errorf("note reply = %q, want %q", resultText(t, res), tt.want)
+			}
+		})
+	}
+
+	res, _, err := showTool(ctx, nil, showArgs{ID: 1})
+	if err != nil {
+		t.Fatalf("showTool: %v", err)
+	}
+	if got := resultText(t, res); !strings.Contains(got, "\nnotes:\n") || !strings.HasSuffix(got, " blocked on lease; next: retry") {
+		t.Errorf("show reply = %q, want it to end with the note", got)
+	}
+}
+
 // TestAddRejectsIncompleteTickets covers the validation addTool does before it
 // writes anything: a ticket missing one of these is one nobody can act on
 // later, and a project nobody created is where a ticket goes to be lost.

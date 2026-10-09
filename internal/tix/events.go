@@ -3,7 +3,9 @@ package tix
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -29,6 +31,46 @@ func recordEvent(exec sqlExecer, id int, event string, data any) error {
 		return fmt.Errorf("recording %s event: %w", event, err)
 	}
 	return nil
+}
+
+// Note appends a free-form handoff note to a ticket's history. It changes
+// nothing else: a note records context, not a transition.
+func Note(id int, body string) error {
+	if strings.TrimSpace(body) == "" {
+		return errors.New("a note body is required")
+	}
+	if _, err := Show(id); err != nil {
+		return err
+	}
+	return recordEvent(db, id, "note", map[string]string{"body": body})
+}
+
+// NoteEntry is one handoff note, decoded from its event.
+type NoteEntry struct {
+	At   time.Time `json:"at"`
+	Body string    `json:"body"`
+}
+
+// Notes returns a ticket's notes, oldest first.
+func Notes(id int) ([]NoteEntry, error) {
+	events, err := Events(id)
+	if err != nil {
+		return nil, err
+	}
+	notes := []NoteEntry{}
+	for _, e := range events {
+		if e.Event != "note" {
+			continue
+		}
+		var data struct {
+			Body string `json:"body"`
+		}
+		if err := json.Unmarshal(e.Data, &data); err != nil {
+			return nil, fmt.Errorf("decoding note: %w", err)
+		}
+		notes = append(notes, NoteEntry{At: e.At, Body: data.Body})
+	}
+	return notes, nil
 }
 
 // Events returns a ticket's history, oldest first.

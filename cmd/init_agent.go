@@ -75,6 +75,7 @@ Use `+"`TIX_DB=%s tix`"+`.
 - Check for one that already exists with `+"`tix search --project %s TERM`"+` before filing.
 - Add follow-up tickets with `+"`tix add --project %s --body-file PATH --priority N TITLE`"+`.
 - After verification, close work with `+"`tix done ID`"+` (run `+"`tix check ID`"+` first unless a done hook does).
+- Stopping without done? Leave a handoff with `+"`tix note ID TEXT`"+`: what was done, decided and by whom, what's next, files touched.
 - Use the project name `+"`%s`"+` verbatim: an unknown `+"`--project`"+` is rejected, and a new project needs `+"`tix projects add NAME`"+` or `+"`--create`"+`.
 - Read the plain text output: it is shorter than JSON for every command. Add `+"`--json`"+` (with `+"`--compact`"+`/`+"`--fields`"+`) only when a program parses the result.
 

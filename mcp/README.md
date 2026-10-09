@@ -16,6 +16,7 @@ It calls the same `internal/tix` library functions the CLI uses, and talks to th
 | `tix_search`     | Find a project's tickets by a term in the title or body.           |
 | `tix_show`       | Show a single ticket by id.                                        |
 | `tix_edit`       | Edit fields of an existing ticket.                                 |
+| `tix_note`       | Append a handoff note; `tix_show` prints a ticket's notes.         |
 | `tix_projects`   | List all projects with ticket counts per status.                   |
 
 `tix_search` is the one to reach for before filing: past about fifty tickets, nobody — least of all a client that files independently of whoever works the backlog — can hold the list in their head, and a duplicate costs more to notice later than the call costs now. It searches every status, because work that already shipped makes a new ticket just as redundant as an open one does.
