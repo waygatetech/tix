@@ -1306,3 +1306,64 @@ func TestCheckCapacityRejectsBadEnv(t *testing.T) {
 		t.Fatalf("CheckCapacity = %v, want TIX_MAX_ACTIVE error", err)
 	}
 }
+
+func TestReviewQueue(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("TIX_MAX_ACTIVE", "0")
+	newProjects(t, "acme", "zen")
+	// Each ticket is claimed, then given a cached plan and a plan event at a
+	// fixed time so the oldest-first order is deterministic.
+	seed := []struct {
+		project, state, at string
+	}{
+		{"acme", ReviewAwaiting, "2026-01-03 00:00:00"},
+		{"zen", ReviewAwaiting, "2026-01-01 00:00:00"},
+		{"acme", ReviewApproved, "2026-01-02 00:00:00"},
+		{"acme", "", "2026-01-02 00:00:00"},
+	}
+	ids := make([]int, len(seed))
+	for i, s := range seed {
+		if _, err := Add(fmt.Sprintf("t%d", i), "", 1, s.project, nil); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+		ticket, err := ClaimNext(s.project)
+		if err != nil {
+			t.Fatalf("ClaimNext: %v", err)
+		}
+		ids[i] = ticket.ID
+		plan := fmt.Sprintf(`{"path":"plans/%d.md","ticket":"t","review":{"tier":1,"state":%q}}`, ticket.ID, s.state)
+		if _, err := db.Exec(`UPDATE tickets SET plan = ? WHERE id = ?`, plan, ticket.ID); err != nil {
+			t.Fatalf("setting plan: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO ticket_events (ticket_id, event, at) VALUES (?, 'plan', ?)`, ticket.ID, s.at); err != nil {
+			t.Fatalf("inserting plan event: %v", err)
+		}
+	}
+
+	tests := []struct {
+		name    string
+		project string
+		want    []int
+	}{
+		{name: "every project, oldest first", project: "", want: []int{ids[1], ids[0]}},
+		{name: "one project", project: "acme", want: []int{ids[0]}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			items, err := ReviewQueue(tt.project)
+			if err != nil {
+				t.Fatalf("ReviewQueue: %v", err)
+			}
+			var got []int
+			for _, item := range items {
+				got = append(got, item.ID)
+				if item.Plan == nil || item.Plan.Path == "" || item.Since.IsZero() {
+					t.Fatalf("item %d missing plan or since: %+v", item.ID, item)
+				}
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ReviewQueue(%q) = %v, want %v", tt.project, got, tt.want)
+			}
+		})
+	}
+}

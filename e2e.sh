@@ -568,8 +568,11 @@ check "plan hook receives extension frontmatter" '"tests":["go test"]' cat "$sbx
 check_absent "show --json omits extension frontmatter" '"tests"' "$tmp/tix" show "$sp_id" --json --compact
 check_status "approve fails when the approve hook fails" 1 env HOME="$tmp/plan-home" "$tmp/tix" approve "$sp_id"
 check "failed approve leaves the plan awaiting review" '"state":"awaiting_review"' "$tmp/tix" show "$sp_id" --json --compact
+check "queue lists the plan awaiting review" "sp-$sp_id [tier 1] planned (sbxplan, waiting" "$tmp/tix" queue
+check "queue --project filters" "plans/sp-$sp_id.md" "$tmp/tix" queue --project sbxplan
 printf '#!/bin/sh\ncat >/dev/null\n[ "$TIX_HOOK" = approve ]\n' >"$sbx_repo/.tix/approve-hook"
 check "approve passes when the approve hook passes" "approved plan" env HOME="$tmp/plan-home" "$tmp/tix" approve "$sp_id"
+check_absent "queue drops an approved plan" "sp-$sp_id" "$tmp/tix" queue
 
 echo
 echo "all $pass checks passed"

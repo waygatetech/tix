@@ -988,6 +988,50 @@ func capacityAt(scope, project string, max int) error {
 	return nil
 }
 
+// QueueItem is a ticket waiting on a human, and since when.
+type QueueItem struct {
+	Ticket
+	Since time.Time `json:"since"`
+}
+
+// ReviewQueue lists unfinished tickets whose plan awaits review, oldest wait
+// first, in project or every project when project is "". Since is the latest
+// plan event, which is when the current review wait began.
+func ReviewQueue(project string) ([]QueueItem, error) {
+	if project != "" {
+		resolved, err := ResolveProject(project)
+		if err != nil {
+			return nil, err
+		}
+		project = resolved
+	}
+	tickets, err := queryTickets(`SELECT `+ticketColumns+` FROM tickets
+		WHERE status != 'done' AND json_extract(plan, '$.review.state') = ?
+			AND (? = '' OR project = ?)`, ReviewAwaiting, project, project)
+	if err != nil {
+		return nil, fmt.Errorf("listing review queue: %w", err)
+	}
+	items := make([]QueueItem, 0, len(tickets))
+	for _, ticket := range tickets {
+		if ticket.Plan, err = planFor(ticket.ID); err != nil {
+			return nil, err
+		}
+		item := QueueItem{Ticket: ticket}
+		// ponytail: one query per queued ticket; fine while the queue is human-sized.
+		err := db.QueryRow(`SELECT at FROM ticket_events WHERE ticket_id = ? AND event = 'plan'
+			ORDER BY id DESC LIMIT 1`, ticket.ID).Scan(&item.Since)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("reading plan time for ticket %d: %w", ticket.ID, err)
+		}
+		if item.Since.IsZero() {
+			item.Since = ticket.UpdatedAt
+		}
+		items = append(items, item)
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Since.Before(items[j].Since) })
+	return items, nil
+}
+
 func ClaimNext(project string) (Ticket, error) {
 	ticket, _, err := ClaimNextEvaluated(context.Background(), project)
 	return ticket, err
