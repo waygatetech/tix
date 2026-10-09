@@ -239,6 +239,9 @@ func IndexPlan(ctx context.Context, id int, path string) (Plan, error) {
 	if err := storePlan(tx, id, plan); err != nil {
 		return Plan{}, err
 	}
+	if err := recordEvent(tx, id, "plan", plan.Review); err != nil {
+		return Plan{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return Plan{}, fmt.Errorf("committing plan: %w", err)
 	}
@@ -449,8 +452,19 @@ func Approve(id int) (Plan, error) {
 		return Plan{}, fmt.Errorf("ticket %d has no plan awaiting review", id)
 	}
 	plan.Review.State = ReviewApproved
-	if err := storePlan(db, id, *plan); err != nil {
+	tx, err := db.Begin()
+	if err != nil {
+		return Plan{}, fmt.Errorf("beginning approve transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := storePlan(tx, id, *plan); err != nil {
 		return Plan{}, err
+	}
+	if err := recordEvent(tx, id, "approve", map[string]int{"tier": plan.Review.Tier}); err != nil {
+		return Plan{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Plan{}, fmt.Errorf("committing approval: %w", err)
 	}
 	return *plan, nil
 }

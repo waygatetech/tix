@@ -273,6 +273,22 @@ var migrations = []string{
 	// features can query concepts and paths without reading the repo. The
 	// plan file itself stays canonical; NULL means none has been indexed.
 	`ALTER TABLE tickets ADD COLUMN plan TEXT;`,
+	// ticket_events is the lifecycle history workflow metrics derive from.
+	// Triggers make it append-only, and ticket_id has no foreign key so rm
+	// leaves a removed ticket's history behind.
+	`CREATE TABLE IF NOT EXISTS ticket_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		ticket_id INTEGER NOT NULL,
+		event TEXT NOT NULL,
+		at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		data TEXT
+	);
+	CREATE INDEX IF NOT EXISTS ticket_events_ticket_id
+		ON ticket_events(ticket_id, id);
+	CREATE TRIGGER IF NOT EXISTS ticket_events_no_update BEFORE UPDATE ON ticket_events
+		BEGIN SELECT RAISE(ABORT, 'ticket_events is append-only'); END;
+	CREATE TRIGGER IF NOT EXISTS ticket_events_no_delete BEFORE DELETE ON ticket_events
+		BEGIN SELECT RAISE(ABORT, 'ticket_events is append-only'); END;`,
 }
 
 // migrate applies every migration the database has not seen yet. The version

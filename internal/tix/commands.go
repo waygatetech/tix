@@ -394,6 +394,9 @@ func Done(id int) error {
 	if n == 0 {
 		return noSuchTicket(id)
 	}
+	if err := recordEvent(tx, id, "done", nil); err != nil {
+		return err
+	}
 	// Closing an epic's last unfinished child closes the epic, and so on up.
 	for doneID := id; ; {
 		if err := unblockDependents(tx, doneID); err != nil {
@@ -417,6 +420,9 @@ func Done(id int) error {
 		}
 		if _, err := tx.Exec(`UPDATE tickets SET status = 'done', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, parentID); err != nil {
 			return fmt.Errorf("close parent failed: %w", err)
+		}
+		if err := recordEvent(tx, parentID, "done", map[string]int{"closed_by": doneID}); err != nil {
+			return err
 		}
 		doneID = parentID
 	}
@@ -881,6 +887,9 @@ func claimNext(project string) (Ticket, error) {
 	if n == 0 {
 		return Ticket{}, errors.New("ticket already claimed")
 	}
+	if err := recordEvent(tx, id, "claim", map[string]string{"status": "in_progress"}); err != nil {
+		return Ticket{}, err
+	}
 
 	ticket, err := scanTicket(tx.QueryRow(
 		`SELECT `+ticketColumns+` FROM tickets WHERE id = ?`, id).Scan)
@@ -913,6 +922,9 @@ func transitionOpenTicket(id int, status string) (Ticket, error) {
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return Ticket{}, errors.New("ticket already claimed")
+	}
+	if err := recordEvent(tx, id, "claim", map[string]string{"status": status}); err != nil {
+		return Ticket{}, err
 	}
 	ticket, err := scanTicket(tx.QueryRow(`SELECT `+ticketColumns+` FROM tickets WHERE id = ?`, id).Scan)
 	if err != nil {

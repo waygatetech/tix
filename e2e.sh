@@ -288,6 +288,8 @@ check "rm removes a ticket" "ac-2 removed (acme: write docs)" "$tmp/tix" rm 2 --
 check "done marks a ticket" "ac-1 done (acme: fix login bug)" "$tmp/tix" done 1
 check_absent "list excludes done ticket" "ac-1" "$tmp/tix" list --project acme
 check "list --all shows done ticket" "x ac-1" "$tmp/tix" list --project acme -a
+check "show --events prints the done transition" " done" "$tmp/tix" show 1 --events
+check "show --events supports JSON" '"event":"done"' "$tmp/tix" show 1 --events --json --compact
 # work that already shipped is still a duplicate, so search sees closed tickets
 # without being asked
 check "search finds a done ticket" "x ac-1" "$tmp/tix" search --project acme login

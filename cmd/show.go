@@ -16,6 +16,8 @@ func formatTimestamp(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
+var showEvents bool
+
 var showCmd = &cobra.Command{
 	Use:               "show [id]",
 	Short:             "Show a ticket",
@@ -33,6 +35,19 @@ var showCmd = &cobra.Command{
 		}
 		if err := requireProjectMatch(ticket, project); err != nil {
 			return err
+		}
+		if showEvents {
+			events, err := tix.Events(id)
+			if err != nil {
+				return err
+			}
+			if jsonOutput {
+				return printJSON(events, compactOutput, fieldsOutput)
+			}
+			for _, e := range events {
+				fmt.Printf("%s %s %s\n", formatTimestamp(e.At), e.Event, e.Data)
+			}
+			return nil
 		}
 		if jsonOutput {
 			return printJSON(ticket, compactOutput, fieldsOutput)
@@ -113,6 +128,7 @@ func init() {
 	showCmd.Flags().StringVarP(&project, "project", "p", "", "project the ticket must belong to (errors on mismatch)")
 	showCmd.Flags().BoolVar(&jsonOutput, "json", false, "output ticket as JSON")
 	showCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
+	showCmd.Flags().BoolVar(&showEvents, "events", false, "print the ticket's lifecycle event timeline")
 	showCmd.Flags().StringVar(&fieldsOutput, "fields", "", "comma-separated JSON fields to include")
 	rootCmd.AddCommand(showCmd)
 }
