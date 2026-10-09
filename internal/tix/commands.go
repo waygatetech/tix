@@ -380,12 +380,12 @@ func Reorder(ids []int) error {
 }
 
 func Done(id int) error {
-	return closeTicket(id, nil)
+	return closeTicket(id, nil, nil)
 }
 
 // closeTicket marks id done, recording attempt alongside when it came through
-// the done hook.
-func closeTicket(id int, attempt *doneAttempt) error {
+// the done hook, and commit as the done event's data when known.
+func closeTicket(id int, attempt *doneAttempt, commit *doneCommit) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -405,7 +405,11 @@ func closeTicket(id int, attempt *doneAttempt) error {
 			return err
 		}
 	}
-	if err := recordEvent(tx, id, "done", nil); err != nil {
+	var data any
+	if commit != nil {
+		data = commit
+	}
+	if err := recordEvent(tx, id, "done", data); err != nil {
 		return err
 	}
 	// Closing an epic's last unfinished child closes the epic, and so on up.

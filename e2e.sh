@@ -428,6 +428,25 @@ check "an explicit --project overrides the directory" "sandbox ticket" bash -c "
 check "set-repo-path registers a project created earlier" "zen $tmp/zen-repo" bash -c "mkdir -p '$tmp/zen-repo' && '$tmp/tix' projects set-repo-path zen '$tmp/zen-repo'"
 check "a project registered later infers too" "refactor parser" bash -c "cd '$tmp/zen-repo' && '$tmp/tix' list --all"
 
+# audit: done records HEAD, and a later revert of the ticket's commit (made
+# after done, the usual order) lands as a reverted event exactly once
+rv="$tmp/revert-repo"
+rvgit() { git -C "$rv" -c user.email=t@example.com -c user.name=t "$@"; }
+mkdir -p "$rv"
+rvgit init -q -b main
+rvgit commit -q --allow-empty -m base
+"$tmp/tix" projects add reverty --key rv --repo-path "$rv" >/dev/null
+"$tmp/tix" add --project reverty "revert me" -b body >/dev/null
+rv_id=$("$tmp/tix" list --project reverty --json --compact --fields id | grep -o '[0-9]\+' | head -1)
+echo x > "$rv/f"
+check "done records the repo's HEAD" "rv-$rv_id done" env HOME="$tmp/home" "$tmp/tix" done "$rv_id"
+check "done event carries the sha" '"branch":"main","dirty":true' "$tmp/tix" show "$rv_id" --events --json --compact
+rvgit add f && rvgit commit -q -m "ticket work"
+rvgit revert --no-edit HEAD >/dev/null
+check "audit records the revert" "rv-$rv_id reverted" "$tmp/tix" audit --project reverty
+check_absent "audit is idempotent" "reverted" "$tmp/tix" audit --project reverty
+check "audit rejects a non-positive window" "days must be > 0" "$tmp/tix" audit --project reverty --days 0
+
 # web: the dashboard is the one view that needs every project at once, and its
 # page is a template the compiler cannot check, so serve it for real and look
 web_port=$((20000 + RANDOM % 20000))

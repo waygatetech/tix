@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // doneOutputCap bounds how much hook stdout a done_attempt event keeps.
@@ -23,10 +24,45 @@ type doneAttempt struct {
 	Output any    `json:"output,omitempty"`
 }
 
+// doneCommit is a done event's data: where the repo stood when the ticket
+// closed. Dirty means the change was not committed yet, so audit attributes the
+// ticket to the commit made on top of SHA.
+type doneCommit struct {
+	SHA    string `json:"sha"`
+	Branch string `json:"branch"`
+	Dirty  bool   `json:"dirty"`
+}
+
+// headCommit is nil when repo is not a git checkout with a commit: recording
+// where a ticket landed is best effort and never blocks done.
+func headCommit(ctx context.Context, repo string) *doneCommit {
+	if repo == "" {
+		return nil
+	}
+	sha, err := git(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		return nil
+	}
+	branch, err := git(ctx, repo, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return nil
+	}
+	status, err := git(ctx, repo, "status", "--porcelain")
+	if err != nil {
+		return nil
+	}
+	return &doneCommit{
+		SHA:    strings.TrimSpace(sha),
+		Branch: strings.TrimSpace(branch),
+		Dirty:  strings.TrimSpace(status) != "",
+	}
+}
+
 // RunDone runs the project's done hook (.tix/done-hook in its repo, else
 // ~/.tix/done-hook) with the ticket ID as its argument, from the repo
 // directory. A failing hook records a failed done_attempt and leaves the
-// ticket open; a passing one, or no hook, records a pass and closes it.
+// ticket open; a passing one, or no hook, records a pass and closes it, with
+// the repo's HEAD on the done event.
 func RunDone(ctx context.Context, id int) error {
 	ticket, err := Show(id)
 	if err != nil {
@@ -36,13 +72,13 @@ func RunDone(ctx context.Context, id int) error {
 	if err != nil {
 		return err
 	}
-	attempt := doneAttempt{Result: "pass"}
-	if hook == "" {
-		return closeTicket(id, &attempt)
-	}
 	repo, err := repoPathFor(ticket.Project)
 	if err != nil {
 		return err
+	}
+	attempt := doneAttempt{Result: "pass"}
+	if hook == "" {
+		return closeTicket(id, &attempt, headCommit(ctx, repo))
 	}
 	cmd := exec.CommandContext(ctx, hook, strconv.Itoa(id))
 	cmd.Dir = repo
@@ -53,7 +89,7 @@ func RunDone(ctx context.Context, id int) error {
 	}
 	attempt.Output = hookOutput(out)
 	if runErr == nil {
-		return closeTicket(id, &attempt)
+		return closeTicket(id, &attempt, headCommit(ctx, repo))
 	}
 	attempt.Result = "fail"
 	attempt.Stage = failedStage(hook, out)
