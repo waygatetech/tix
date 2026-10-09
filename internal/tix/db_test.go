@@ -320,6 +320,9 @@ func TestMigrateUpgradesPreMigrationDatabase(t *testing.T) {
 	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN plan`); err != nil {
 		t.Fatalf("drop plan: %v", err)
 	}
+	if _, err := db.Exec(`ALTER TABLE projects DROP COLUMN max_active`); err != nil {
+		t.Fatalf("drop max_active: %v", err)
+	}
 	if _, err := db.Exec(`PRAGMA user_version = 0`); err != nil {
 		t.Fatalf("reset user_version: %v", err)
 	}

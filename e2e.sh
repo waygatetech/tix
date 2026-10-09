@@ -11,6 +11,8 @@ go build -o "$tmp/tix" .
 
 # isolated database so the suite never touches a real ~/.tix DB
 export TIX_DB="$tmp/tix.db"
+# the suite claims far more than the default cap of 3; the cap gets its own checks
+export TIX_MAX_ACTIVE=0
 
 pass=0
 check() {
@@ -233,6 +235,16 @@ check_absent "show hides order by default" '"order"' "$tmp/tix" show 2 --json --
 check "show exposes order when requested" '{"id":2,"order":2}' "$tmp/tix" show 2 --json --compact --fields id,order
 check "claim-next marks ticket in progress" '"status":"in_progress"' "$tmp/tix" claim-next --project zen --json --compact
 check "claim-next removes claimed ticket from next" "no open tickets" "$tmp/tix" next --project zen
+
+# claim-next stops at the human's review capacity instead of growing a queue
+"$tmp/tix" add --project capped "first" -b "one" --create >/dev/null
+"$tmp/tix" add --project capped "second" -b "two" >/dev/null
+check "set-max-active caps a project" "capped max active 1" "$tmp/tix" projects set-max-active capped 1
+check_status "claim-next claims under the project cap" 0 "$tmp/tix" claim-next --project capped
+check_status "claim-next exits 4 at the project cap" 4 "$tmp/tix" claim-next --project capped
+check "claim-next lists what is waiting on review" "first" "$tmp/tix" claim-next --project capped
+check "set-max-active 0 removes the project cap" "capped max active 0" "$tmp/tix" projects set-max-active capped 0
+check_status "claim-next exits 4 at the global cap" 4 env TIX_MAX_ACTIVE=1 "$tmp/tix" claim-next --project capped
 
 # a ticket claimed by an agent that died stays in_progress forever, so stale is
 # the only thing that names it again. --for 0 stands in for waiting a day.

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -18,6 +19,21 @@ var claimNextCmd = &cobra.Command{
 		project, err := projectScope()
 		if err != nil {
 			return err
+		}
+		if err := tix.CheckCapacity(project); err != nil {
+			var full *tix.AtCapacityError
+			if !errors.As(err, &full) {
+				return err
+			}
+			fmt.Fprintln(os.Stderr, "Waiting on review:")
+			for _, t := range full.Waiting {
+				prefix, err := tix.PrefixFor(t.Project)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(os.Stderr, "  %s %s\n", tix.FormatID(prefix, t.ID), t.Title)
+			}
+			return exitError{code: exitAtCapacity, err: err}
 		}
 		ticket, evaluation, err := tix.ClaimNextEvaluated(cmd.Context(), project)
 		if err != nil {

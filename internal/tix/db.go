@@ -289,6 +289,9 @@ var migrations = []string{
 		BEGIN SELECT RAISE(ABORT, 'ticket_events is append-only'); END;
 	CREATE TRIGGER IF NOT EXISTS ticket_events_no_delete BEFORE DELETE ON ticket_events
 		BEGIN SELECT RAISE(ABORT, 'ticket_events is append-only'); END;`,
+	// max_active caps a project's in_progress tickets at what its human can
+	// review; 0 leaves only the global TIX_MAX_ACTIVE cap.
+	`ALTER TABLE projects ADD COLUMN max_active INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // migrate applies every migration the database has not seen yet. The version

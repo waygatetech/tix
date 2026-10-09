@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -94,6 +95,30 @@ PATH defaults to the current directory.`,
 	},
 }
 
+// projectsSetMaxActiveCmd caps a project's in-progress work at what its human
+// can review; claim-next refuses to claim past it.
+var projectsSetMaxActiveCmd = &cobra.Command{
+	Use:   "set-max-active NAME N",
+	Short: "Cap a project's in-progress tickets (0 removes the cap)",
+	Long: `claim-next exits 4 instead of claiming once NAME has N tickets in
+progress. TIX_MAX_ACTIVE caps every project together (default 3, 0 disables).
+Set N from tix stats review throughput, not by feel.`,
+	Args:              cobra.ExactArgs(2),
+	PersistentPreRunE: initDB,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		n, err := strconv.Atoi(args[1])
+		if err != nil {
+			return fmt.Errorf("parsing N: %w", err)
+		}
+		resolved, err := tix.SetMaxActive(args[0], n)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s max active %d\n", resolved, n)
+		return nil
+	},
+}
+
 // absRepoPath stores repo paths absolute: a relative one means whatever
 // directory it was typed in, which is exactly the thing the stored path is
 // supposed to answer.
@@ -116,5 +141,6 @@ func init() {
 	projectsAddCmd.Flags().StringVar(&projectRepoPath, "repo-path", "", "path to the project's repository")
 	projectsCmd.AddCommand(projectsAddCmd)
 	projectsCmd.AddCommand(projectsSetRepoPathCmd)
+	projectsCmd.AddCommand(projectsSetMaxActiveCmd)
 	rootCmd.AddCommand(projectsCmd)
 }

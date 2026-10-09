@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -900,6 +902,90 @@ func NextTicket(project string) (Ticket, error) {
 	ticket.DependsOnIDs = dependsOn
 	ticket.BlockedByIDs = blockedBy
 	return ticket, nil
+}
+
+// DefaultMaxActive is the global cap on in_progress tickets when TIX_MAX_ACTIVE
+// is unset: more parallel work than a human can review only grows a queue.
+const DefaultMaxActive = 3
+
+// AtCapacityError reports that claiming more work would outrun review.
+// Waiting is the in_progress work the human should get to first.
+type AtCapacityError struct {
+	Scope   string
+	Max     int
+	Waiting []Ticket
+}
+
+func (e *AtCapacityError) Error() string {
+	return fmt.Sprintf("%s has %d in-progress tickets (cap %d); review or finish one before claiming more",
+		e.Scope, len(e.Waiting), e.Max)
+}
+
+// CheckCapacity returns an *AtCapacityError when project is at its own
+// max_active cap or the database is at the global TIX_MAX_ACTIVE cap.
+//
+// ponytail: checked outside the claim transaction, so racing claims can go one
+// over the cap; move it into the claim tx if a hard cap ever matters.
+func CheckCapacity(project string) error {
+	project, err := ResolveProject(project)
+	if err != nil {
+		return err
+	}
+	var projectMax int
+	if err := db.QueryRow(`SELECT max_active FROM projects WHERE name = ?`, project).Scan(&projectMax); err != nil {
+		return fmt.Errorf("reading project cap: %w", err)
+	}
+	if projectMax > 0 {
+		if err := capacityAt(project, project, projectMax); err != nil {
+			return err
+		}
+	}
+	globalMax, err := globalMaxActive()
+	if err != nil {
+		return err
+	}
+	if globalMax > 0 {
+		return capacityAt("all projects", "", globalMax)
+	}
+	return nil
+}
+
+func globalMaxActive() (int, error) {
+	value := strings.TrimSpace(os.Getenv("TIX_MAX_ACTIVE"))
+	if value == "" {
+		return DefaultMaxActive, nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("TIX_MAX_ACTIVE must be 0 (no cap) or a positive integer, got %q", value)
+	}
+	return n, nil
+}
+
+// capacityAt lists in_progress tickets in project ("" for every project) and
+// reports them as waiting once there are max of them.
+func capacityAt(scope, project string, max int) error {
+	rows, err := db.Query(`SELECT `+ticketColumns+` FROM tickets
+		WHERE status = 'in_progress' AND (? = '' OR project = ?) ORDER BY updated_at, id`, project, project)
+	if err != nil {
+		return fmt.Errorf("listing in-progress tickets: %w", err)
+	}
+	defer rows.Close()
+	var waiting []Ticket
+	for rows.Next() {
+		ticket, err := scanTicket(rows.Scan)
+		if err != nil {
+			return fmt.Errorf("listing in-progress tickets: %w", err)
+		}
+		waiting = append(waiting, ticket)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("listing in-progress tickets: %w", err)
+	}
+	if len(waiting) >= max {
+		return &AtCapacityError{Scope: scope, Max: max, Waiting: waiting}
+	}
+	return nil
 }
 
 func ClaimNext(project string) (Ticket, error) {

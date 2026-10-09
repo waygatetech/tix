@@ -274,6 +274,22 @@ func SetRepoPath(name, repoPath string) (string, error) {
 	return resolved, nil
 }
 
+// SetMaxActive caps how many of a project's tickets can be in_progress before
+// claim-next refuses another; 0 removes the project's cap.
+func SetMaxActive(name string, n int) (string, error) {
+	if n < 0 {
+		return "", fmt.Errorf("max active must be 0 or more, got %d", n)
+	}
+	resolved, err := ResolveProject(name)
+	if err != nil {
+		return "", err
+	}
+	if _, err := db.Exec(`UPDATE projects SET max_active = ? WHERE name = ?`, n, resolved); err != nil {
+		return "", fmt.Errorf("update project failed: %w", err)
+	}
+	return resolved, nil
+}
+
 // unknownProjectError explains what to type instead of the name that missed.
 func unknownProjectError(name string, projects []Project) error {
 	// The message names the escape hatch on both surfaces, because the caller

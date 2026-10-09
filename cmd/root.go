@@ -58,6 +58,10 @@ func Execute(version string) {
 // command as failed.
 const exitAwaitingReview = 3
 
+// exitAtCapacity tells an agent claim-next refused because the human's review
+// queue is full, so it should stop rather than retry.
+const exitAtCapacity = 4
+
 // exitError is an error that exits with its own code instead of 1.
 type exitError struct {
 	code int

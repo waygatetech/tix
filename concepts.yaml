@@ -43,3 +43,5 @@ revert-audit:
   module: internal/tix/audit.go
 workflow-metrics:
   module: internal/tix/stats.go
+review-capacity:
+  module: internal/tix/commands.go

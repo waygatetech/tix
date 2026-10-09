@@ -1245,3 +1245,64 @@ func TestRejectAndReopen(t *testing.T) {
 		}
 	})
 }
+
+func TestCheckCapacity(t *testing.T) {
+	tests := []struct {
+		name       string
+		env        string
+		projectMax int
+		claimed    map[string]int
+		wantScope  string
+	}{
+		{name: "no caps", env: "0", claimed: map[string]int{"acme": 5}},
+		{name: "default global cap", env: "", claimed: map[string]int{"acme": 2, "zen": 1}, wantScope: "all projects"},
+		{name: "under default global cap", env: "", claimed: map[string]int{"acme": 2}},
+		{name: "global cap counts every project", env: "2", claimed: map[string]int{"zen": 2}, wantScope: "all projects"},
+		{name: "project cap", env: "0", projectMax: 2, claimed: map[string]int{"acme": 2}, wantScope: "acme"},
+		{name: "project cap ignores other projects", env: "0", projectMax: 2, claimed: map[string]int{"acme": 1, "zen": 3}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupTestDB(t)
+			t.Setenv("TIX_MAX_ACTIVE", tt.env)
+			newProjects(t, "acme", "zen")
+			if _, err := SetMaxActive("acme", tt.projectMax); err != nil {
+				t.Fatalf("SetMaxActive: %v", err)
+			}
+			for project, n := range tt.claimed {
+				for i := 0; i < n; i++ {
+					if _, err := Add(fmt.Sprintf("%s %d", project, i), "", 1, project, nil); err != nil {
+						t.Fatalf("Add: %v", err)
+					}
+					if _, err := ClaimNext(project); err != nil {
+						t.Fatalf("ClaimNext(%s): %v", project, err)
+					}
+				}
+			}
+
+			err := CheckCapacity("acme")
+			if tt.wantScope == "" {
+				if err != nil {
+					t.Fatalf("CheckCapacity = %v, want nil", err)
+				}
+				return
+			}
+			full, ok := err.(*AtCapacityError)
+			if !ok {
+				t.Fatalf("CheckCapacity = %v, want *AtCapacityError", err)
+			}
+			if full.Scope != tt.wantScope || len(full.Waiting) != full.Max {
+				t.Fatalf("CheckCapacity = %+v, want scope %q with Max waiting tickets", full, tt.wantScope)
+			}
+		})
+	}
+}
+
+func TestCheckCapacityRejectsBadEnv(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+	t.Setenv("TIX_MAX_ACTIVE", "lots")
+	if err := CheckCapacity("acme"); err == nil || !strings.Contains(err.Error(), "TIX_MAX_ACTIVE") {
+		t.Fatalf("CheckCapacity = %v, want TIX_MAX_ACTIVE error", err)
+	}
+}
