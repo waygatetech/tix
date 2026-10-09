@@ -525,5 +525,16 @@ check_status "json fields with unknown field exits non-zero" 1 "$tmp/tix" show 1
 check "next with no open tickets reports error" "no open tickets" "$tmp/tix" next --project acme
 check_status "next with no open tickets exits non-zero" 1 "$tmp/tix" next --project acme
 
+# a plan's acceptance criteria are indexed and shown; no hook means tier 0
+sbx_repo="$tmp/sandbox-repo"
+mkdir -p "$sbx_repo/plans" "$tmp/plan-home"
+"$tmp/tix" projects add sbxplan --key sp --repo-path "$sbx_repo" >/dev/null
+"$tmp/tix" add --project sbxplan "planned" --body "b" >/dev/null
+sp_id=$("$tmp/tix" list --project sbxplan --json --compact --fields id | grep -o '[0-9][0-9]*' | head -1)
+printf -- '---\nticket: sp-%s\nacceptance: [show lists acceptance]\n---\n' "$sp_id" >"$sbx_repo/plans/sp-$sp_id.md"
+check "plan indexes acceptance" "indexed" env HOME="$tmp/plan-home" "$tmp/tix" plan "$sp_id"
+check "show lists acceptance" "show lists acceptance" "$tmp/tix" show "$sp_id"
+check "show --json includes acceptance" '"acceptance":["show lists acceptance"]' "$tmp/tix" show "$sp_id" --json --compact
+
 echo
 echo "all $pass checks passed"

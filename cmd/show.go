@@ -91,6 +91,7 @@ var showCmd = &cobra.Command{
 			printPlanList("new concepts", plan.NewConcepts)
 			printPlanList("paths", plan.Paths)
 			printPlanList("contracts changed", plan.ContractsChanged)
+			printPlanList("acceptance", plan.Acceptance)
 			for _, d := range plan.Decisions {
 				fmt.Printf("  decision: %s (recommend %s)\n", d.Q, d.Recommend)
 			}

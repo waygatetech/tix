@@ -28,6 +28,9 @@ type Plan struct {
 	Paths            []string   `json:"paths" yaml:"paths"`
 	ContractsChanged []string   `json:"contracts_changed" yaml:"contracts_changed"`
 	Decisions        []Decision `json:"decisions" yaml:"decisions"`
+	// Acceptance lists observable, testable statements of what done means.
+	// Tier 1+ plans must have at least one.
+	Acceptance []string `json:"acceptance" yaml:"acceptance"`
 	// Review is the plan hook's ruling, set by tix rather than the file.
 	Review *Review `json:"review,omitempty" yaml:"-"`
 }
@@ -229,6 +232,9 @@ func IndexPlan(ctx context.Context, id int, path string) (Plan, error) {
 	var prev *Review
 	if ticket.Plan != nil {
 		prev = ticket.Plan.Review
+	}
+	if got.Tier > 0 && len(plan.Acceptance) == 0 {
+		return Plan{}, fmt.Errorf("%s: tier %d plans need acceptance criteria: list observable, testable statements under acceptance", path, got.Tier)
 	}
 	plan.Review = nextReview(prev, got)
 

@@ -85,10 +85,8 @@ func TestPlanHookReview(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	front := "---\nticket: " + FormatID("fe", id) + "\n---\n"
-	if err := os.WriteFile(filepath.Join(repo, "plans", FormatID("fe", id)+".md"), []byte(front), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	planPath := filepath.Join(repo, "plans", FormatID("fe", id)+".md")
+	front := "---\nticket: " + FormatID("fe", id) + "\n"
 	hook := filepath.Join(repo, ".tix", "plan-hook")
 
 	// Steps run in order: each builds on the review state the last one left.
@@ -98,18 +96,27 @@ func TestPlanHookReview(t *testing.T) {
 		wantErr   string
 		wantTier  int
 		wantState string
+		noAccept  bool // write the plan without acceptance criteria
 	}{
-		{"tier 1 awaits review", `{"tier":1,"reason":"decisions"}`, "", 1, ReviewAwaiting},
-		{"approve", "", "", 1, ReviewApproved},
-		{"same tier keeps approval", `{"tier":1}`, "", 1, ReviewApproved},
-		{"rising tier resets approval", `{"tier":2}`, "", 2, ReviewAwaiting},
-		{"malformed hook output", `nope`, "parsing plan hook", 2, ReviewAwaiting},
-		{"out of range tier", `{"tier":3}`, "tier from 0 to 2", 2, ReviewAwaiting},
-		{"tier 0 proceeds", `{"tier":0}`, "", 0, ""},
-		{"approve with nothing awaiting", "", "no plan awaiting review", 0, ""},
+		{"tier 1 awaits review", `{"tier":1,"reason":"decisions"}`, "", 1, ReviewAwaiting, false},
+		{"approve", "", "", 1, ReviewApproved, false},
+		{"same tier keeps approval", `{"tier":1}`, "", 1, ReviewApproved, false},
+		{"rising tier resets approval", `{"tier":2}`, "", 2, ReviewAwaiting, false},
+		{"tier 1+ without acceptance rejected", `{"tier":1}`, "need acceptance criteria", 2, ReviewAwaiting, true},
+		{"malformed hook output", `nope`, "parsing plan hook", 2, ReviewAwaiting, false},
+		{"out of range tier", `{"tier":3}`, "tier from 0 to 2", 2, ReviewAwaiting, false},
+		{"tier 0 proceeds without acceptance", `{"tier":0}`, "", 0, "", true},
+		{"approve with nothing awaiting", "", "no plan awaiting review", 0, "", false},
 	}
 	for _, step := range steps {
 		t.Run(step.name, func(t *testing.T) {
+			plan := front + "acceptance: [it works]\n---\n"
+			if step.noAccept {
+				plan = front + "---\n"
+			}
+			if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			if step.output == "" {
 				_, err = Approve(id)
 			} else {
