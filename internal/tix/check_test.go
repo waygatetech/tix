@@ -132,3 +132,108 @@ func TestConceptNames(t *testing.T) {
 		})
 	}
 }
+
+// gitRepo makes a repo on main with one commit, plus a worktree for each ref
+// at .worktrees/<ref> on a branch of the same name. run runs git in a dir.
+func gitRepo(t *testing.T, refs ...string) (repo string, run func(dir string, args ...string)) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo = t.TempDir()
+	run = func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run(repo, "init", "-q", "-b", "main")
+	run(repo, "config", "user.email", "t@example.com")
+	run(repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(repo, "add", ".")
+	run(repo, "commit", "-q", "-m", "init")
+	for _, ref := range refs {
+		run(repo, "worktree", "add", "-q", filepath.Join(worktreesDir, ref), "-b", ref)
+	}
+	return repo, run
+}
+
+func TestTicketDir(t *testing.T) {
+	repo, _ := gitRepo(t, "ap-1")
+	if err := os.MkdirAll(filepath.Join(repo, worktreesDir, "ap-2"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		repo string
+		ref  string
+		want string
+	}{
+		{"git worktree", repo, "ap-1", filepath.Join(repo, worktreesDir, "ap-1")},
+		{"stray directory", repo, "ap-2", repo},
+		{"no worktree", repo, "ap-3", repo},
+		{"not a git repo", t.TempDir(), "ap-1", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := tt.want
+			if want == "" {
+				want = tt.repo
+			}
+			if got := ticketDir(context.Background(), tt.repo, tt.ref); got != want {
+				t.Fatalf("ticketDir() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestCheckWorktree(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("HOME", t.TempDir())
+	if _, err := CreateProject(Project{Name: "app", Key: "ap"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	id64, err := Add("scoped", "", 1, "app", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	id := int(id64)
+	ref := FormatID("ap", id)
+	repo, run := gitRepo(t, ref)
+	if _, err := db.Exec(`UPDATE projects SET repo_path = ? WHERE name = 'app'`, repo); err != nil {
+		t.Fatal(err)
+	}
+	tree := filepath.Join(repo, worktreesDir, ref)
+	files := map[string]string{
+		filepath.Join(repo, "junk.txt"):         "untracked in the main checkout\n",
+		filepath.Join(tree, "plans", ref+".md"): "---\nticket: " + ref + "\npaths: [\"internal/**\"]\n---\n",
+		filepath.Join(tree, "internal", "a.go"): "package a\n",
+		filepath.Join(tree, "README.md"):        "changed on the branch\n",
+	}
+	for path, body := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run(tree, "add", ".")
+	run(tree, "commit", "-q", "-m", "work")
+	if _, err := IndexPlan(context.Background(), id, filepath.Join(tree, "plans", ref+".md")); err != nil {
+		t.Fatalf("IndexPlan: %v", err)
+	}
+
+	got, err := Check(context.Background(), id, "main")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if want := (CheckResult{OutOfScope: []string{"README.md"}}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Check() = %+v, want %+v", got, want)
+	}
+}

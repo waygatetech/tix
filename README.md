@@ -276,7 +276,7 @@ For work that needs scoping, the loop grows a plan:
 3. **Plan** — write `plans/<key>-ID.md` with `concepts`, `new_concepts`, and `paths` frontmatter, then `tix plan ID` to index it and lease its concepts.
 4. **Approve** — if a plan hook tiers it 1 or higher, `tix plan` exits 3 until a human runs `tix approve ID`.
 5. **Implement** — change only files the plan's `paths` cover.
-6. **Done** — `tix done ID`, with `tix check ID` run first (ideally from a done hook) to reject a diff outside the plan.
+6. **Done** — `tix done ID`, with `tix check ID` run first (ideally from a done hook) to reject a diff outside the plan. For a ticket worked in a `.worktrees/<key>-ID` git worktree, the check and the done hook run there.
 
 The guidance stays short on purpose: the commands and hooks enforce the rules.
 
@@ -288,7 +288,7 @@ Hooks are executables tix runs at workflow steps. Each is looked up in the proje
 |------|------|-------|-----|---------------|
 | `plan-hook` | `tix plan` | stdin: the plan as JSON | `TIX_HOOK=plan` | Prints `{"tier": 0-2, "reason": "..."}`. Non-zero exit or bad output fails `tix plan`. |
 | `approve-hook` | `tix approve` | stdin: `{"ticket": {...}, "plan": {...}}` | `TIX_HOOK=approve` | Non-zero exit fails the approve; the plan stays `awaiting_review`. |
-| `done-hook` | `tix done` | argv: the numeric ticket ID; runs from the repo directory | — | Non-zero exit leaves the ticket open. Optional JSON stdout with a `"stage"` names the failing step. |
+| `done-hook` | `tix done` | argv: the numeric ticket ID; runs from the ticket's worktree (`.worktrees/<key>-<id>` under the repo, when git lists it as one), else the repo directory | — | Non-zero exit leaves the ticket open. Optional JSON stdout with a `"stage"` names the failing step. |
 
 The plan JSON hooks receive carries tix's fields (`ticket`, `concepts`, `new_concepts`, `paths`, `contracts_changed`, `decisions`, `acceptance`, `path`, `review`) plus any other frontmatter keys, such as `tests` or `critique_responses`, passed through as written. tix validates only its own fields and does not cache extension keys on the ticket, so `tix show --json` omits them.
 

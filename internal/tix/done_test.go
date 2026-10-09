@@ -101,3 +101,51 @@ func jsonEqual(t *testing.T, a, b string) bool {
 	yb, _ := json.Marshal(y)
 	return string(xb) == string(yb)
 }
+
+func TestRunDoneInWorktree(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("HOME", t.TempDir())
+	if _, err := CreateProject(Project{Name: "acme", Key: "ac"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	id64, err := Add("ship it", "", 1, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	id := int(id64)
+	ref := FormatID("ac", id)
+	repo, _ := gitRepo(t, ref)
+	if _, err := db.Exec(`UPDATE projects SET repo_path = ? WHERE name = 'acme'`, repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ClaimNext("acme"); err != nil {
+		t.Fatalf("ClaimNext: %v", err)
+	}
+	// The hook lives in the main checkout but must run in the worktree.
+	if err := os.MkdirAll(filepath.Join(repo, ".tix"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\n[ \"$(git rev-parse --abbrev-ref HEAD)\" = \"" + ref + "\" ]\n"
+	if err := os.WriteFile(filepath.Join(repo, ".tix", "done-hook"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RunDone(context.Background(), id); err != nil {
+		t.Fatalf("RunDone: %v", err)
+	}
+	events, err := Events(id)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var done doneCommit
+	for _, e := range events {
+		if e.Event == "done" {
+			if err := json.Unmarshal(e.Data, &done); err != nil {
+				t.Fatalf("done data: %v", err)
+			}
+		}
+	}
+	if done.Branch != ref {
+		t.Fatalf("done event branch = %q, want %q", done.Branch, ref)
+	}
+}

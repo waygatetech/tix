@@ -56,28 +56,32 @@ func Check(ctx context.Context, id int, base string) (CheckResult, error) {
 	if repo == "" {
 		return CheckResult{}, fmt.Errorf("project %q has no repo_path", ticket.Project)
 	}
+	dir := ticketDir(ctx, repo, plan.Ticket)
 
-	mergeBase, err := git(ctx, repo, "merge-base", "HEAD", base)
+	mergeBase, err := git(ctx, dir, "merge-base", "HEAD", base)
 	if err != nil {
 		return CheckResult{}, err
 	}
 	mergeBase = strings.TrimSpace(mergeBase)
-	diffed, err := git(ctx, repo, "diff", "--name-only", "--no-renames", "-z", mergeBase)
+	diffed, err := git(ctx, dir, "diff", "--name-only", "--no-renames", "-z", mergeBase)
 	if err != nil {
 		return CheckResult{}, err
 	}
-	untracked, err := git(ctx, repo, "ls-files", "--others", "--exclude-standard", "-z")
+	untracked, err := git(ctx, dir, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
 		return CheckResult{}, err
 	}
 
-	exempt, err := checkExempt(repo)
+	exempt, err := checkExempt(dir)
 	if err != nil {
 		return CheckResult{}, err
 	}
 	exempt = append(exempt, conceptsFile)
-	if rel, err := filepath.Rel(repo, plan.Path); err == nil && plan.Path != "" {
-		exempt = append(exempt, filepath.ToSlash(rel))
+	// The plan may have been indexed from either checkout.
+	for _, root := range []string{repo, dir} {
+		if rel, err := filepath.Rel(root, plan.Path); err == nil && plan.Path != "" {
+			exempt = append(exempt, filepath.ToSlash(rel))
+		}
 	}
 
 	var result CheckResult
@@ -95,8 +99,8 @@ func Check(ctx context.Context, id int, base string) (CheckResult, error) {
 
 	if seen[conceptsFile] {
 		// A missing file at the merge base just means every concept is new.
-		before, _ := git(ctx, repo, "show", mergeBase+":"+conceptsFile)
-		after, err := os.ReadFile(filepath.Join(repo, conceptsFile))
+		before, _ := git(ctx, dir, "show", mergeBase+":"+conceptsFile)
+		after, err := os.ReadFile(filepath.Join(dir, conceptsFile))
 		if err != nil && !os.IsNotExist(err) {
 			return CheckResult{}, fmt.Errorf("reading %s: %w", conceptsFile, err)
 		}
@@ -105,6 +109,38 @@ func Check(ctx context.Context, id int, base string) (CheckResult, error) {
 		}
 	}
 	return result, nil
+}
+
+// worktreesDir holds a repo's per-ticket git worktrees, each named for its
+// ticket's <key>-<id>.
+const worktreesDir = ".worktrees"
+
+// ticketDir is where a ticket's work lives: <repo>/.worktrees/<ref> when git
+// lists it as a worktree of repo, else repo. Anything git cannot answer, such
+// as a repo that is not a git checkout, falls back to repo.
+func ticketDir(ctx context.Context, repo, ref string) string {
+	if repo == "" {
+		return repo
+	}
+	candidate := filepath.Join(repo, worktreesDir, ref)
+	want, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return repo
+	}
+	list, err := git(ctx, repo, "worktree", "list", "--porcelain")
+	if err != nil {
+		return repo
+	}
+	for _, line := range strings.Split(list, "\n") {
+		path, ok := strings.CutPrefix(line, "worktree ")
+		if !ok {
+			continue
+		}
+		if got, err := filepath.EvalSymlinks(path); err == nil && got == want {
+			return candidate
+		}
+	}
+	return repo
 }
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
