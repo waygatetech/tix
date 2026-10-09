@@ -113,16 +113,22 @@ func repoPathFor(project string) (string, error) {
 // .tix/plan-hook first, then ~/.tix/plan-hook. "" means no hook, which is tier
 // 0, so review is opt-in.
 func planHookPath(project string) (string, error) {
+	return hookPath(project, "plan-hook")
+}
+
+// hookPath finds the named hook in the project's repo .tix directory first,
+// then ~/.tix. "" means neither exists.
+func hookPath(project, name string) (string, error) {
 	var candidates []string
 	repo, err := repoPathFor(project)
 	if err != nil {
 		return "", err
 	}
 	if repo != "" {
-		candidates = append(candidates, filepath.Join(repo, tixDirName, "plan-hook"))
+		candidates = append(candidates, filepath.Join(repo, tixDirName, name))
 	}
 	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, filepath.Join(home, tixDirName, "plan-hook"))
+		candidates = append(candidates, filepath.Join(home, tixDirName, name))
 	}
 	for _, path := range candidates {
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {

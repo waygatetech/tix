@@ -8,8 +8,15 @@ import (
 )
 
 var doneCmd = &cobra.Command{
-	Use:               "done",
-	Short:             "Mark a ticket as done",
+	Use:   "done",
+	Short: "Mark a ticket as done",
+	Long: `Mark a ticket as done.
+
+If the project has a done hook (.tix/done-hook in its repo_path, else
+~/.tix/done-hook), it runs first from the repo with the ticket ID as its
+argument. A non-zero exit leaves the ticket open. Every attempt is recorded
+as a done_attempt event with its stdout, and a JSON "stage" field in that
+output names the failing stage.`,
 	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) != 1 {
@@ -28,7 +35,7 @@ var doneCmd = &cobra.Command{
 		if err := requireProjectMatch(ticket, project); err != nil {
 			return err
 		}
-		if err := tix.Done(id); err != nil {
+		if err := tix.RunDone(cmd.Context(), id); err != nil {
 			return fmt.Errorf("done failed: %w", err)
 		}
 		prefix, err := tix.PrefixFor(ticket.Project)

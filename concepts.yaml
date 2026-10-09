@@ -25,6 +25,8 @@ plan-check:
   module: internal/tix/check.go
 ticket-events:
   module: internal/tix/events.go
+done-hook:
+  module: internal/tix/done.go
 jev:
   module: internal/tix/jev.go
 dashboard:

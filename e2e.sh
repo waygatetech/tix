@@ -285,7 +285,14 @@ check_absent "edit stays quiet when the project is unchanged" "moved from" "$tmp
 "$tmp/tix" rm "$movable" --project zen >/dev/null
 
 check "rm removes a ticket" "ac-2 removed (acme: write docs)" "$tmp/tix" rm 2 --project acme
-check "done marks a ticket" "ac-1 done (acme: fix login bug)" "$tmp/tix" done 1
+# done runs ~/.tix/done-hook, so isolate HOME from the user's real one
+mkdir -p "$tmp/home/.tix"
+printf '#!/bin/sh\necho "{\\"stage\\":\\"test\\"}"\nexit 1\n' >"$tmp/home/.tix/done-hook"
+chmod +x "$tmp/home/.tix/done-hook"
+check_status "done refuses when the done hook fails" 1 env HOME="$tmp/home" "$tmp/tix" done 1
+check "the failed attempt records its stage" '"result":"fail","stage":"test"' "$tmp/tix" show 1 --events --json --compact
+rm "$tmp/home/.tix/done-hook"
+check "done marks a ticket" "ac-1 done (acme: fix login bug)" env HOME="$tmp/home" "$tmp/tix" done 1
 check_absent "list excludes done ticket" "ac-1" "$tmp/tix" list --project acme
 check "list --all shows done ticket" "x ac-1" "$tmp/tix" list --project acme -a
 check "show --events prints the done transition" " done" "$tmp/tix" show 1 --events
