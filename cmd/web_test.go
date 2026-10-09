@@ -37,6 +37,7 @@ func webTestMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", webHandler)
 	mux.HandleFunc("/api/dashboard", webAPIHandler)
+	mux.HandleFunc("GET /metrics", webMetricsHandler)
 	mux.HandleFunc("POST /api/tickets", webCreateTicketHandler)
 	mux.HandleFunc("PATCH /api/tickets/{id}", webEditTicketHandler)
 	return mux
@@ -346,5 +347,56 @@ func TestWebEditTicketHandlerRejectsInvalidID(t *testing.T) {
 	recorder := do(t, mux, http.MethodPatch, "/api/tickets/nope", webEditTicketRequest{Title: &newTitle})
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+}
+
+func TestWebMetrics(t *testing.T) {
+	setupWebDB(t)
+	if _, err := tix.CreateProject(tix.Project{Name: "acme"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	mux := webTestMux()
+
+	tests := []struct {
+		name     string
+		target   string
+		wantCode int
+		wantBody string
+	}{
+		{"renders weekly trends", "/metrics?since=3w", http.StatusOK, "Review queue depth"},
+		{"scopes to a project", "/metrics?project=acme", http.StatusOK, "acme"},
+		{"rejects an unknown project", "/metrics?project=nope", http.StatusBadRequest, "unknown project"},
+		{"rejects a bad window", "/metrics?since=soon", http.StatusBadRequest, "invalid --since"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := do(t, mux, http.MethodGet, tt.target, nil)
+			if rec.Code != tt.wantCode {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tt.wantCode, rec.Body)
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body missing %q:\n%s", tt.wantBody, rec.Body)
+			}
+		})
+	}
+}
+
+func TestSparkline(t *testing.T) {
+	tests := []struct {
+		name   string
+		values []float64
+		want   string
+	}{
+		{"no weeks", nil, ""},
+		{"one week sits mid-chart", []float64{3}, "50.0,2.0"},
+		{"all zero stays on the baseline", []float64{0, 0}, "0.0,30.0 100.0,30.0"},
+		{"peak reaches the top", []float64{0, 2, 1}, "0.0,30.0 50.0,2.0 100.0,16.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sparkline(tt.values); got != tt.want {
+				t.Errorf("sparkline(%v) = %q, want %q", tt.values, got, tt.want)
+			}
+		})
 	}
 }

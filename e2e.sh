@@ -447,6 +447,13 @@ check "audit records the revert" "rv-$rv_id reverted" "$tmp/tix" audit --project
 check_absent "audit is idempotent" "reverted" "$tmp/tix" audit --project reverty
 check "audit rejects a non-positive window" "days must be > 0" "$tmp/tix" audit --project reverty --days 0
 
+# stats folds the events the steps above recorded into workflow outcomes
+check "stats reports the revert" "1 (100%)" "$tmp/tix" stats --project reverty
+check "stats by week adds the review queue" "QUEUE" "$tmp/tix" stats --project reverty --by week
+check "stats emits JSON" '"total"' "$tmp/tix" stats --project reverty --json
+check "stats rejects an unknown grouping" "unknown --by" "$tmp/tix" stats --by month
+check "stats rejects a bad window" "invalid --since" "$tmp/tix" stats --since soon
+
 # web: the dashboard is the one view that needs every project at once, and its
 # page is a template the compiler cannot check, so serve it for real and look
 web_port=$((20000 + RANDOM % 20000))

@@ -39,3 +39,5 @@ agent-guidance:
   module: cmd/init_agent.go
 revert-audit:
   module: internal/tix/audit.go
+workflow-metrics:
+  module: internal/tix/stats.go

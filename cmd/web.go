@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/waygatetech/tix/internal/tix"
@@ -44,6 +45,7 @@ var webCmd = &cobra.Command{
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", webHandler)
 		mux.HandleFunc("/api/dashboard", webAPIHandler)
+		mux.HandleFunc("GET /metrics", webMetricsHandler)
 		mux.HandleFunc("POST /api/tickets", webCreateTicketHandler)
 		mux.HandleFunc("PATCH /api/tickets/{id}", webEditTicketHandler)
 
@@ -59,13 +61,121 @@ func init() {
 	rootCmd.AddCommand(webCmd)
 }
 
-//go:embed web.html
+//go:embed web.html metrics.html
 var webFS embed.FS
 
 var webTemplate = template.Must(template.New("web.html").Funcs(template.FuncMap{
 	"label":       webLabel,
 	"statusClass": webStatusClass,
 }).ParseFS(webFS, "web.html"))
+
+var metricsTemplate = template.Must(template.New("metrics.html").Funcs(template.FuncMap{
+	"hours":     hours,
+	"perTicket": perTicket,
+}).ParseFS(webFS, "metrics.html"))
+
+// metricsPage is tix stats --by week plus one sparkline per headline metric.
+type metricsPage struct {
+	Stats  tix.Stats
+	Since  string
+	Trends []metricsTrend
+}
+
+type metricsTrend struct {
+	Label  string
+	Last   string
+	Points string
+}
+
+// webMetricsHandler renders weekly workflow outcomes, so a hook or reviewer
+// change shows up as a bend in the trend lines.
+func webMetricsHandler(w http.ResponseWriter, r *http.Request) {
+	since := r.URL.Query().Get("since")
+	if since == "" {
+		since = "12w"
+	}
+	window, err := parseSince(since)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	stats, err := tix.BuildStats(tix.StatsQuery{
+		Project: r.URL.Query().Get("project"),
+		Since:   time.Now().UTC().Add(-window),
+		By:      tix.StatsByWeek,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	series := []struct {
+		label  string
+		format string
+		value  func(tix.StatsGroup) float64
+	}{
+		{"Done per week", "%.0f", func(g tix.StatsGroup) float64 { return float64(g.Done) }},
+		{"Cycle time p50 (h)", "%.1f", func(g tix.StatsGroup) float64 { return deref(g.CycleP50Hours) }},
+		{"Done failures per ticket", "%.2f", func(g tix.StatsGroup) float64 { return g.FailuresPerTicket }},
+		{"Blocking findings per ticket", "%.2f", func(g tix.StatsGroup) float64 { return deref(g.BlockingPerTicket) }},
+		{"Rejects + reopens + reverts", "%.0f", func(g tix.StatsGroup) float64 { return float64(g.Rejects + g.Reopens + g.Reverts) }},
+		{"Awaiting review (h)", "%.1f", func(g tix.StatsGroup) float64 { return g.AwaitingReviewHours }},
+		{"Review queue depth", "%.0f", func(g tix.StatsGroup) float64 { return deref(intFloat(g.QueueDepth)) }},
+	}
+	page := metricsPage{Stats: stats, Since: since}
+	for _, s := range series {
+		values := make([]float64, len(stats.Groups))
+		for i, g := range stats.Groups {
+			values[i] = s.value(g)
+		}
+		trend := metricsTrend{Label: s.label, Points: sparkline(values)}
+		if len(values) > 0 {
+			trend.Last = fmt.Sprintf(s.format, values[len(values)-1])
+		}
+		page.Trends = append(page.Trends, trend)
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := metricsTemplate.Execute(w, page); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func deref(v *float64) float64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func intFloat(v *int) *float64 {
+	if v == nil {
+		return nil
+	}
+	f := float64(*v)
+	return &f
+}
+
+// sparkline maps values onto the template's 100x32 viewBox, highest at the top.
+func sparkline(values []float64) string {
+	peak := 0.0
+	for _, v := range values {
+		peak = max(peak, v)
+	}
+	points := make([]string, len(values))
+	for i, v := range values {
+		x := 50.0
+		if len(values) > 1 {
+			x = float64(i) * 100 / float64(len(values)-1)
+		}
+		y := 30.0
+		if peak > 0 {
+			y = 30 - v/peak*28
+		}
+		points[i] = fmt.Sprintf("%.1f,%.1f", x, y)
+	}
+	return strings.Join(points, " ")
+}
 
 // webPage is the dashboard plus the page-level context that is not per-project.
 type webPage struct {
