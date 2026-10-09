@@ -1,0 +1,37 @@
+# Concepts this repo defines. tix plan rejects plan concepts missing here
+# unless the plan lists them in new_concepts. Entries look like:
+#
+# auth:
+#   owner: team-a
+#   module: internal/auth
+
+schema:
+  module: internal/tix/db.go
+tickets:
+  module: internal/tix/commands.go
+dependencies:
+  module: internal/tix/commands.go
+projects:
+  module: internal/tix/projects.go
+ticket-ids:
+  module: internal/tix/ids.go
+plans:
+  module: internal/tix/plans.go
+leases:
+  module: internal/tix/plans.go
+concept-registry:
+  module: internal/tix/plans.go
+plan-check:
+  module: internal/tix/check.go
+ticket-events:
+  module: internal/tix/events.go
+jev:
+  module: internal/tix/jev.go
+dashboard:
+  module: internal/tix/dashboard.go
+web:
+  module: cmd/web.go
+mcp:
+  module: mcp/server.go
+agent-guidance:
+  module: cmd/init_agent.go
