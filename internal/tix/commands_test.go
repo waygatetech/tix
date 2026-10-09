@@ -1154,3 +1154,94 @@ func TestMissingTicketErrors(t *testing.T) {
 		t.Fatalf("Remove missing ticket error = %v, want no such ticket: 99", err)
 	}
 }
+
+func TestRejectAndReopen(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+	plan := Plan{Ticket: "ac-1", Concepts: []string{"auth"}}
+
+	// newTicket adds a ticket in status, with plan cached when given.
+	newTicket := func(t *testing.T, status string, plan *Plan) int {
+		t.Helper()
+		id64, err := Add("ticket", "", 1, "acme", nil)
+		if err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+		id := int(id64)
+		if plan != nil {
+			if err := storePlan(db, id, *plan); err != nil {
+				t.Fatalf("storePlan: %v", err)
+			}
+		}
+		if _, err := db.Exec(`UPDATE tickets SET status = ? WHERE id = ?`, status, id); err != nil {
+			t.Fatalf("setting status: %v", err)
+		}
+		return id
+	}
+
+	tests := []struct {
+		name       string
+		op         func(int, string) error
+		status     string
+		plan       *Plan
+		reason     string
+		wantErr    string
+		wantStatus string
+		wantPlan   bool
+		wantEvent  string
+	}{
+		{name: "reject in_progress keeps plan", op: Reject, status: "in_progress", plan: &plan, reason: "wrong approach",
+			wantStatus: "in_progress", wantPlan: true, wantEvent: `{"from":"in_progress","reason":"wrong approach"}`},
+		{name: "reject done returns to in_progress", op: Reject, status: "done", reason: "missed a case",
+			wantStatus: "in_progress", wantEvent: `{"from":"done","reason":"missed a case"}`},
+		{name: "reject open refused", op: Reject, status: "open", reason: "x", wantErr: "only in_progress or done"},
+		{name: "reject needs reason", op: Reject, status: "done", reason: " ", wantErr: "reason is required"},
+		{name: "reopen done clears plan", op: Reopen, status: "done", plan: &plan, reason: "broke in prod",
+			wantStatus: "open", wantEvent: `{"reason":"broke in prod"}`},
+		{name: "reopen in_progress refused", op: Reopen, status: "in_progress", reason: "x", wantErr: "only done tickets"},
+		{name: "reopen needs reason", op: Reopen, status: "done", reason: "", wantErr: "reason is required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id := newTicket(t, tt.status, tt.plan)
+			err := tt.op(id, tt.reason)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("op: %v", err)
+			}
+			ticket, err := Show(id)
+			if err != nil {
+				t.Fatalf("Show: %v", err)
+			}
+			if ticket.Status != tt.wantStatus {
+				t.Errorf("status = %q, want %q", ticket.Status, tt.wantStatus)
+			}
+			if (ticket.Plan != nil) != tt.wantPlan {
+				t.Errorf("plan kept = %v, want %v", ticket.Plan != nil, tt.wantPlan)
+			}
+			events, err := Events(id)
+			if err != nil {
+				t.Fatalf("Events: %v", err)
+			}
+			if len(events) == 0 {
+				t.Fatal("no events recorded")
+			}
+			if last := events[len(events)-1]; string(last.Data) != tt.wantEvent {
+				t.Errorf("last event %s data = %s, want %s", last.Event, last.Data, tt.wantEvent)
+			}
+		})
+	}
+
+	t.Run("reject done refuses a concept leased since", func(t *testing.T) {
+		id := newTicket(t, "done", &plan)
+		newTicket(t, "in_progress", &plan)
+		if err := Reject(id, "redo"); err == nil || !strings.Contains(err.Error(), "is leased by") {
+			t.Fatalf("err = %v, want lease conflict", err)
+		}
+	})
+}

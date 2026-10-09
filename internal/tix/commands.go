@@ -460,6 +460,78 @@ func unblockDependents(exec sqlExecer, id int) error {
 	return nil
 }
 
+// Reject records a human sending a plan or delivered work back: an in_progress
+// or done ticket returns to in_progress with its cached plan, and so its
+// leases. A done ticket's leases are re-checked, since another ticket may have
+// planned the same concepts since it closed.
+func Reject(id int, reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return errors.New("a reason is required")
+	}
+	ticket, err := Show(id)
+	if err != nil {
+		return err
+	}
+	if ticket.Status != "in_progress" && ticket.Status != "done" {
+		return fmt.Errorf("ticket %d is %s; only in_progress or done tickets can be rejected", id, ticket.Status)
+	}
+	prefix, err := PrefixFor(ticket.Project)
+	if err != nil {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning reject transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if ticket.Status == "done" && ticket.Plan != nil {
+		if err := checkLeases(tx, ticket, prefix, *ticket.Plan); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE tickets SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("rejecting ticket: %w", err)
+	}
+	if err := recordEvent(tx, id, "reject", map[string]string{"reason": reason, "from": ticket.Status}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing reject: %w", err)
+	}
+	return nil
+}
+
+// Reopen records a done ticket found broken later. It returns to open with its
+// cached plan cleared, so whoever claims it must plan again before holding
+// leases.
+func Reopen(id int, reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return errors.New("a reason is required")
+	}
+	ticket, err := Show(id)
+	if err != nil {
+		return err
+	}
+	if ticket.Status != "done" {
+		return fmt.Errorf("ticket %d is %s; only done tickets can be reopened", id, ticket.Status)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning reopen transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE tickets SET status = 'open', plan = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("reopening ticket: %w", err)
+	}
+	if err := recordEvent(tx, id, "reopen", map[string]string{"reason": reason}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing reopen: %w", err)
+	}
+	return nil
+}
+
 func ListTickets(options ListOptions) ([]Ticket, error) {
 	project, err := ResolveProject(options.Project)
 	if err != nil {

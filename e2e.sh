@@ -297,6 +297,13 @@ check_absent "list excludes done ticket" "ac-1" "$tmp/tix" list --project acme
 check "list --all shows done ticket" "x ac-1" "$tmp/tix" list --project acme -a
 check "show --events prints the done transition" " done" "$tmp/tix" show 1 --events
 check "show --events supports JSON" '"event":"done"' "$tmp/tix" show 1 --events --json --compact
+check_status "reject requires a reason" 1 "$tmp/tix" reject 1
+check "reject sends done work back" "rejected 1" "$tmp/tix" reject 1 --reason "missed a case"
+check "reject records its reason" '"from":"done","reason":"missed a case"' "$tmp/tix" show 1 --events --json --compact
+check "done closes the rejected ticket again" "ac-1 done" env HOME="$tmp/home" "$tmp/tix" done 1
+check "reopen returns a done ticket to open" "reopened 1" "$tmp/tix" reopen 1 --reason "broke later"
+check "reopen records its reason" '"event":"reopen","at":' "$tmp/tix" show 1 --events --json --compact
+check "done closes the reopened ticket" "ac-1 done" env HOME="$tmp/home" "$tmp/tix" done 1
 # work that already shipped is still a duplicate, so search sees closed tickets
 # without being asked
 check "search finds a done ticket" "x ac-1" "$tmp/tix" search --project acme login
