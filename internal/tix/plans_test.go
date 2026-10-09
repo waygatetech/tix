@@ -35,7 +35,7 @@ func TestIndexPlan(t *testing.T) {
 	}{
 		{"no frontmatter", "", "no frontmatter"},
 		{"unclosed", "---\nticket: " + ref + "\n", "not closed"},
-		{"unknown field", "---\nticket: " + ref + "\nconcept: [x]\n---\n", "concept"},
+		{"extension field passes", "---\nticket: " + ref + "\ntests: [x]\n---\n", ""},
 		{"wrong ticket", "---\nticket: fe-99999\n---\n", "plan is for ticket"},
 		{"bare ticket", "---\nticket: \"" + strings.TrimPrefix(ref, "fe-") + "\"\n---\n", "plan is for ticket"},
 		{"valid", "---\nticket: " + ref + "\nconcepts: [auth]\npaths: [cmd/*.go]\ndecisions:\n  - q: which?\n    options: [a, b]\n    recommend: a\n    why: simpler\n---\nbody\n", ""},
@@ -118,7 +118,7 @@ func TestPlanHookReview(t *testing.T) {
 				t.Fatal(err)
 			}
 			if step.output == "" {
-				_, err = Approve(id)
+				_, err = Approve(context.Background(), id)
 			} else {
 				script := "#!/bin/sh\ncat >/dev/null\necho '" + step.output + "'\n"
 				if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
@@ -138,6 +138,105 @@ func TestPlanHookReview(t *testing.T) {
 			}
 			if got := ticket.Plan.Review; got == nil || got.Tier != step.wantTier || got.State != step.wantState {
 				t.Fatalf("Review = %#v, want tier %d state %q", got, step.wantTier, step.wantState)
+			}
+		})
+	}
+}
+
+func TestHookExtensions(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	if _, err := CreateProject(Project{Name: "frontend", Key: "fe", RepoPath: repo}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	id64, err := Add("hook me", "", 1, "frontend", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	id := int(id64)
+	for _, dir := range []string{"plans", ".tix"} {
+		if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := "---\nticket: " + FormatID("fe", id) + "\nacceptance: [it works]\ntests: [go test]\n---\n"
+	if err := os.WriteFile(filepath.Join(repo, "plans", FormatID("fe", id)+".md"), []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Each hook saves its stdin and TIX_HOOK so the test can inspect them.
+	writeHook := func(name, body string) {
+		script := "#!/bin/sh\ncat >\"$0.in\"\necho \"$TIX_HOOK\" >\"$0.env\"\n" + body
+		if err := os.WriteFile(filepath.Join(repo, ".tix", name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(name string) string {
+		data, err := os.ReadFile(filepath.Join(repo, ".tix", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(data))
+	}
+	writeHook("plan-hook", `echo '{"tier":1}'`+"\n")
+	if _, err := IndexPlan(context.Background(), id, ""); err != nil {
+		t.Fatalf("IndexPlan: %v", err)
+	}
+
+	steps := []struct {
+		name      string
+		check     func()
+		hookBody  string
+		wantErr   string
+		wantState string
+	}{
+		{"plan hook sees extensions", func() {
+			if got := read("plan-hook.env"); got != "plan" {
+				t.Fatalf("plan hook TIX_HOOK = %q", got)
+			}
+			if in := read("plan-hook.in"); !strings.Contains(in, `"tests":["go test"]`) {
+				t.Fatalf("plan hook stdin = %s, want tests", in)
+			}
+			ticket, err := Show(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ticket.Plan.Extra != nil {
+				t.Fatalf("cached plan kept extensions: %#v", ticket.Plan.Extra)
+			}
+		}, "", "", ""},
+		{"failing approve hook blocks", nil, "exit 1\n", "approve hook", ReviewAwaiting},
+		{"passing approve hook approves", func() {
+			if got := read("approve-hook.env"); got != "approve" {
+				t.Fatalf("approve hook TIX_HOOK = %q", got)
+			}
+			in := read("approve-hook.in")
+			if !strings.Contains(in, `"ticket":{`) || !strings.Contains(in, `"tests":["go test"]`) {
+				t.Fatalf("approve hook stdin = %s, want ticket and plan extensions", in)
+			}
+		}, "exit 0\n", "", ReviewApproved},
+	}
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			if step.hookBody != "" {
+				writeHook("approve-hook", step.hookBody)
+				_, err := Approve(context.Background(), id)
+				if step.wantErr == "" && err != nil {
+					t.Fatalf("Approve: %v", err)
+				}
+				if step.wantErr != "" && (err == nil || !strings.Contains(err.Error(), step.wantErr)) {
+					t.Fatalf("Approve error = %v, want containing %q", err, step.wantErr)
+				}
+				ticket, err := Show(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ticket.Plan.Review.State != step.wantState {
+					t.Fatalf("state = %q, want %q", ticket.Plan.Review.State, step.wantState)
+				}
+			}
+			if step.check != nil {
+				step.check()
 			}
 		})
 	}

@@ -536,5 +536,19 @@ check "plan indexes acceptance" "indexed" env HOME="$tmp/plan-home" "$tmp/tix" p
 check "show lists acceptance" "show lists acceptance" "$tmp/tix" show "$sp_id"
 check "show --json includes acceptance" '"acceptance":["show lists acceptance"]' "$tmp/tix" show "$sp_id" --json --compact
 
+# extension frontmatter reaches hooks; a failing approve hook blocks approval
+mkdir -p "$sbx_repo/.tix"
+printf -- '---\nticket: sp-%s\nacceptance: [hooks run]\ntests: [go test]\n---\n' "$sp_id" >"$sbx_repo/plans/sp-$sp_id.md"
+printf '#!/bin/sh\ncat >"$0.in"\necho "{\\"tier\\":1}"\n' >"$sbx_repo/.tix/plan-hook"
+printf '#!/bin/sh\ncat >/dev/null\n[ "$TIX_HOOK" = approve ] || exit 2\nexit 1\n' >"$sbx_repo/.tix/approve-hook"
+chmod +x "$sbx_repo/.tix/plan-hook" "$sbx_repo/.tix/approve-hook"
+check_status "plan with extension frontmatter awaits review" 3 env HOME="$tmp/plan-home" "$tmp/tix" plan "$sp_id"
+check "plan hook receives extension frontmatter" '"tests":["go test"]' cat "$sbx_repo/.tix/plan-hook.in"
+check_absent "show --json omits extension frontmatter" '"tests"' "$tmp/tix" show "$sp_id" --json --compact
+check_status "approve fails when the approve hook fails" 1 env HOME="$tmp/plan-home" "$tmp/tix" approve "$sp_id"
+check "failed approve leaves the plan awaiting review" '"state":"awaiting_review"' "$tmp/tix" show "$sp_id" --json --compact
+printf '#!/bin/sh\ncat >/dev/null\n[ "$TIX_HOOK" = approve ]\n' >"$sbx_repo/.tix/approve-hook"
+check "approve passes when the approve hook passes" "approved plan" env HOME="$tmp/plan-home" "$tmp/tix" approve "$sp_id"
+
 echo
 echo "all $pass checks passed"

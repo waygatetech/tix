@@ -33,6 +33,32 @@ type Plan struct {
 	Acceptance []string `json:"acceptance" yaml:"acceptance"`
 	// Review is the plan hook's ruling, set by tix rather than the file.
 	Review *Review `json:"review,omitempty" yaml:"-"`
+	// Extra holds frontmatter keys tix does not own. Hooks receive them; the
+	// cached plan does not keep them.
+	Extra map[string]any `json:"-" yaml:"-"`
+}
+
+// planKeys are the frontmatter keys tix owns and validates.
+var planKeys = map[string]bool{
+	"ticket": true, "concepts": true, "new_concepts": true, "paths": true,
+	"contracts_changed": true, "decisions": true, "acceptance": true,
+}
+
+// hookInput is the plan as hooks see it: its JSON plus extension keys, with
+// tix's own fields winning any collision.
+func hookInput(plan Plan) (map[string]any, error) {
+	encoded, err := json.Marshal(plan)
+	if err != nil {
+		return nil, fmt.Errorf("encoding plan for hook: %w", err)
+	}
+	input := map[string]any{}
+	for k, v := range plan.Extra {
+		input[k] = v
+	}
+	if err := json.Unmarshal(encoded, &input); err != nil {
+		return nil, fmt.Errorf("decoding plan for hook: %w", err)
+	}
+	return input, nil
 }
 
 // Review states. A tier 0 plan has neither: it proceeds without a ruling.
@@ -57,9 +83,8 @@ type Decision struct {
 	Why       string   `json:"why" yaml:"why"`
 }
 
-// ParsePlan reads the YAML frontmatter between the leading "---" lines. Unknown
-// keys are rejected, so a misspelled field fails here instead of silently
-// dropping out of the index.
+// ParsePlan reads the YAML frontmatter between the leading "---" lines. Keys
+// tix does not own land in Extra for hooks, so other tools can extend plans.
 func ParsePlan(data []byte) (Plan, error) {
 	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 	rest, ok := bytes.CutPrefix(data, []byte("---\n"))
@@ -72,10 +97,20 @@ func ParsePlan(data []byte) (Plan, error) {
 	}
 
 	var plan Plan
-	dec := yaml.NewDecoder(bytes.NewReader(front))
-	dec.KnownFields(true)
-	if err := dec.Decode(&plan); err != nil {
+	if err := yaml.Unmarshal(front, &plan); err != nil {
 		return Plan{}, fmt.Errorf("parsing plan frontmatter: %w", err)
+	}
+	var all map[string]any
+	if err := yaml.Unmarshal(front, &all); err != nil {
+		return Plan{}, fmt.Errorf("parsing plan frontmatter: %w", err)
+	}
+	for k, v := range all {
+		if !planKeys[k] {
+			if plan.Extra == nil {
+				plan.Extra = map[string]any{}
+			}
+			plan.Extra[k] = v
+		}
 	}
 	if plan.Ticket == "" {
 		return Plan{}, errors.New("plan frontmatter is missing ticket")
@@ -141,20 +176,35 @@ func hookPath(project, name string) (string, error) {
 	return "", nil
 }
 
+// hookCmd runs hook with input as JSON on stdin and TIX_HOOK=name in its
+// environment, returning its stdout.
+func hookCmd(ctx context.Context, hook, name string, input any) ([]byte, error) {
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("encoding %s hook input: %w", name, err)
+	}
+	cmd := exec.CommandContext(ctx, hook)
+	cmd.Stdin = bytes.NewReader(encoded)
+	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), "TIX_HOOK="+name)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("running %s hook %s: %w", name, hook, err)
+	}
+	return out, nil
+}
+
 // runPlanHook sends the plan as JSON on stdin and reads back
 // {"tier": 0-2, "reason": "..."}. A failing or malformed hook is an error
 // rather than tier 0: a broken policy should not wave plans through.
 func runPlanHook(ctx context.Context, hook string, plan Plan) (Review, error) {
-	input, err := json.Marshal(plan)
+	input, err := hookInput(plan)
 	if err != nil {
-		return Review{}, fmt.Errorf("encoding plan for hook: %w", err)
+		return Review{}, err
 	}
-	cmd := exec.CommandContext(ctx, hook)
-	cmd.Stdin = bytes.NewReader(input)
-	cmd.Stderr = os.Stderr
-	out, err := cmd.Output()
+	out, err := hookCmd(ctx, hook, "plan", input)
 	if err != nil {
-		return Review{}, fmt.Errorf("running plan hook %s: %w", hook, err)
+		return Review{}, err
 	}
 	var result struct {
 		Tier   *int   `json:"tier"`
@@ -454,14 +504,43 @@ func Concepts(project string) ([]Concept, error) {
 	return concepts, nil
 }
 
-// Approve records a human's sign-off on a plan awaiting review.
-func Approve(id int) (Plan, error) {
+// Approve records a human's sign-off on a plan awaiting review. The project's
+// approve hook, if any, runs first with {ticket, plan} on stdin; a non-zero
+// exit leaves the plan awaiting review.
+func Approve(ctx context.Context, id int) (Plan, error) {
 	plan, err := planFor(id)
 	if err != nil {
 		return Plan{}, err
 	}
 	if plan == nil || plan.Review == nil || plan.Review.State != ReviewAwaiting {
 		return Plan{}, fmt.Errorf("ticket %d has no plan awaiting review", id)
+	}
+	ticket, err := Show(id)
+	if err != nil {
+		return Plan{}, err
+	}
+	hook, err := hookPath(ticket.Project, "approve-hook")
+	if err != nil {
+		return Plan{}, err
+	}
+	if hook != "" {
+		// Extensions are not cached, so read them back from the plan file.
+		data, err := os.ReadFile(plan.Path)
+		if err != nil {
+			return Plan{}, fmt.Errorf("reading plan for approve hook: %w", err)
+		}
+		parsed, err := ParsePlan(data)
+		if err != nil {
+			return Plan{}, fmt.Errorf("%s: %w", plan.Path, err)
+		}
+		plan.Extra = parsed.Extra
+		input, err := hookInput(*plan)
+		if err != nil {
+			return Plan{}, err
+		}
+		if _, err := hookCmd(ctx, hook, "approve", map[string]any{"ticket": ticket, "plan": input}); err != nil {
+			return Plan{}, err
+		}
 	}
 	plan.Review.State = ReviewApproved
 	tx, err := db.Begin()

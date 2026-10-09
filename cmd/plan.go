@@ -74,7 +74,7 @@ var approveCmd = &cobra.Command{
 		if err := requireProjectMatch(ticket, project); err != nil {
 			return err
 		}
-		if _, err := tix.Approve(id); err != nil {
+		if _, err := tix.Approve(cmd.Context(), id); err != nil {
 			return err
 		}
 		fmt.Printf("approved plan for %s\n", args[0])

@@ -277,6 +277,18 @@ For work that needs scoping, the loop grows a plan:
 
 The guidance stays short on purpose: the commands and hooks enforce the rules.
 
+### Hooks
+
+Hooks are executables tix runs at workflow steps. Each is looked up in the project repo's `.tix/` first, then `~/.tix/`; a missing hook is skipped. Tools that extend tix should target this contract, not tix internals.
+
+| Hook | When | Input | Env | Exit / output |
+|------|------|-------|-----|---------------|
+| `plan-hook` | `tix plan` | stdin: the plan as JSON | `TIX_HOOK=plan` | Prints `{"tier": 0-2, "reason": "..."}`. Non-zero exit or bad output fails `tix plan`. |
+| `approve-hook` | `tix approve` | stdin: `{"ticket": {...}, "plan": {...}}` | `TIX_HOOK=approve` | Non-zero exit fails the approve; the plan stays `awaiting_review`. |
+| `done-hook` | `tix done` | argv: the numeric ticket ID; runs from the repo directory | — | Non-zero exit leaves the ticket open. Optional JSON stdout with a `"stage"` names the failing step. |
+
+The plan JSON hooks receive carries tix's fields (`ticket`, `concepts`, `new_concepts`, `paths`, `contracts_changed`, `decisions`, `acceptance`, `path`, `review`) plus any other frontmatter keys, such as `tests` or `critique_responses`, passed through as written. tix validates only its own fields and does not cache extension keys on the ticket, so `tix show --json` omits them.
+
 `tix` also ships an MCP server as the `tix mcp` subcommand, so agents like Claude Desktop can call ticket operations directly as tools instead of shelling out to the CLI. No extra binary to install — see [mcp/README.md](mcp/README.md).
 
 ### Token cost: CLI vs. MCP
