@@ -29,16 +29,21 @@ func NewServer(version string) *mcp.Server {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "tix_add",
-		Description: "Create a new ticket in a project. The project must already exist; " +
-			"call tix_projects to see the names, or pass create=true to make a new one.",
+		Description: "Create a new ticket in a project. Set parent_id to file it under an " +
+			"epic and depends_on_ids for tickets that must finish first. The project " +
+			"must already exist; call tix_projects to see the names, or pass " +
+			"create=true to make a new one.",
 	}, addTool)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "tix_add_batch",
 		Description: "Create several tickets in one project in a single call. Use this " +
 			"instead of repeated tix_add whenever a session produces more than one " +
-			"ticket. A ticket can name an earlier ticket in the batch as its parent " +
-			"with parent_index, making it easy to create an epic and its subtasks. " +
+			"ticket, and whenever a plan has phases or areas: put each epic first and " +
+			"point its children at it with parent_index (or parent_id for an epic that " +
+			"already exists), and express ordering constraints with " +
+			"depends_on_indexes / depends_on_ids. Tickets are worked in the order " +
+			"listed within a priority, so list them in the order they should be done. " +
 			"The project must already exist; call tix_projects to see the " +
 			"names, or pass create=true to make a new one.",
 	}, addBatchTool)
@@ -72,6 +77,13 @@ func NewServer(version string) *mcp.Server {
 	}, noteTool)
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name: "tix_reorder",
+		Description: "Set the work order of tickets: the ids given are moved, in the order " +
+			"listed, after every other ticket. Order only breaks ties within a " +
+			"priority, so change priority with tix_edit to move a ticket across tiers.",
+	}, reorderTool)
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tix_projects",
 		Description: "List all projects with ticket counts per status.",
 	}, projectsTool)
@@ -89,6 +101,20 @@ const projectRule = "Pass one of those names exactly as written. A name that mat
 	"create=true on tix_add or tix_add_batch, which registers the name before " +
 	"filing the ticket."
 
+// structureRule explains how tickets relate, because a client that does not
+// know tix has epics and dependencies fakes them with title prefixes like
+// "[POLL-1]" and prose in the body, which nothing in tix can read back.
+const structureRule = "Tickets have structure; use it instead of encoding it in titles or bodies. " +
+	"An epic is an ordinary ticket that other tickets name as their parent " +
+	"(parent_index in tix_add_batch, parent_id in tix_add/tix_edit): when work " +
+	"splits into phases or areas, create one epic per area and file each task " +
+	"under it, rather than prefixing titles like \"[AREA-1]\". A ticket that " +
+	"cannot start until others finish lists them as dependencies " +
+	"(depends_on_indexes or depends_on_ids) and stays blocked until they are " +
+	"done. Tickets are worked by priority (0 most urgent), then in creation " +
+	"order, so file them in the order they should happen; tix_reorder changes " +
+	"the order afterwards. Plan a whole breakdown in one tix_add_batch call."
+
 // instructions tells the client which projects it may file against, because
 // nothing else here does: a client that cannot see the list guesses a name, and
 // a guessed name is how one backlog becomes four. The list is read once at
@@ -102,7 +128,7 @@ func instructions() string {
 	if err != nil || len(projects) == 0 {
 		return "tix keeps tickets in project-scoped backlogs, and every tool that " +
 			"takes a project needs the name of one that exists. Call tix_projects " +
-			"for the list. " + projectRule
+			"for the list. " + projectRule + "\n\n" + structureRule
 	}
 
 	var b strings.Builder
@@ -112,6 +138,8 @@ func instructions() string {
 	}
 	b.WriteString("\n")
 	b.WriteString(projectRule)
+	b.WriteString("\n\n")
+	b.WriteString(structureRule)
 	return b.String()
 }
 
@@ -229,10 +257,13 @@ func resolveProject(name string, create bool) (string, error) {
 }
 
 type batchTicket struct {
-	Title       string `json:"title" jsonschema:"the ticket title"`
-	Body        string `json:"body" jsonschema:"the ticket body/description"`
-	Priority    *int   `json:"priority,omitempty" jsonschema:"priority 0-5, lower is more urgent (default 2)"`
-	ParentIndex *int   `json:"parent_index,omitempty" jsonschema:"zero-based index of an earlier ticket in this batch to use as this ticket's parent (epic)"`
+	Title            string `json:"title" jsonschema:"the ticket title"`
+	Body             string `json:"body" jsonschema:"the ticket body/description"`
+	Priority         *int   `json:"priority,omitempty" jsonschema:"priority 0-5, lower is more urgent (default 2)"`
+	ParentIndex      *int   `json:"parent_index,omitempty" jsonschema:"zero-based index of an earlier ticket in this batch to use as this ticket's parent (epic)"`
+	ParentID         *int   `json:"parent_id,omitempty" jsonschema:"id of an existing ticket to use as this ticket's parent (epic); conflicts with parent_index"`
+	DependsOnIndexes []int  `json:"depends_on_indexes,omitempty" jsonschema:"zero-based indexes of earlier tickets in this batch that must be done before this one"`
+	DependsOnIDs     []int  `json:"depends_on_ids,omitempty" jsonschema:"ids of existing tickets that must be done before this one"`
 }
 
 type addBatchArgs struct {
@@ -260,6 +291,14 @@ func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) 
 		if ticket.ParentIndex != nil && (*ticket.ParentIndex < 0 || *ticket.ParentIndex >= i) {
 			return nil, nil, fmt.Errorf("tickets[%d]: parent_index must identify an earlier ticket in the batch", i)
 		}
+		if ticket.ParentIndex != nil && ticket.ParentID != nil {
+			return nil, nil, fmt.Errorf("tickets[%d]: use either parent_index or parent_id, not both", i)
+		}
+		for _, dep := range ticket.DependsOnIndexes {
+			if dep < 0 || dep >= i {
+				return nil, nil, fmt.Errorf("tickets[%d]: depends_on_indexes must identify earlier tickets in the batch", i)
+			}
+		}
 	}
 	project, err := resolveProject(args.Project, args.Create)
 	if err != nil {
@@ -270,12 +309,16 @@ func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) 
 	ids := make([]int, 0, len(args.Tickets))
 	for i, ticket := range args.Tickets {
 		priority := normalizePriority(ticket.Priority)
-		var parentID *int
+		parentID := ticket.ParentID
 		if ticket.ParentIndex != nil {
 			parent := ids[*ticket.ParentIndex]
 			parentID = &parent
 		}
-		id, err := tix.Add(ticket.Title, ticket.Body, priority, project, parentID)
+		dependsOn := append([]int(nil), ticket.DependsOnIDs...)
+		for _, dep := range ticket.DependsOnIndexes {
+			dependsOn = append(dependsOn, ids[dep])
+		}
+		id, err := tix.Add(ticket.Title, ticket.Body, priority, project, parentID, dependsOn...)
 		if err != nil {
 			// Name what did land so the caller can retry the rest instead of
 			// re-sending the whole batch and duplicating tickets. The ids go in
@@ -451,6 +494,17 @@ func editTool(_ context.Context, _ *mcp.CallToolRequest, args editArgs) (*mcp.Ca
 	// The full detail, not just the fields that changed: an edit is where a
 	// caller most wants to see what the ticket now says.
 	return textResult(ticketDetail(ticket)), nil, nil
+}
+
+type reorderArgs struct {
+	IDs []int `json:"ids" jsonschema:"ticket ids in the order they should be worked"`
+}
+
+func reorderTool(_ context.Context, _ *mcp.CallToolRequest, args reorderArgs) (*mcp.CallToolResult, any, error) {
+	if err := tix.Reorder(args.IDs); err != nil {
+		return nil, nil, fmt.Errorf("reorder failed: %w", err)
+	}
+	return textResult("reordered: " + strings.Replace(joinInts(args.IDs), ", ", " -> ", -1)), nil, nil
 }
 
 func projectsTool(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {

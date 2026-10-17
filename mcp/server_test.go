@@ -73,6 +73,15 @@ func TestInstructionsNameTheProjectsThatExist(t *testing.T) {
 	if !strings.Contains(got, "create=true") {
 		t.Errorf("instructions = %q, want them to name the way to add a project", got)
 	}
+	// Without the structure rule a client fakes epics and dependencies with
+	// title prefixes, so both lists of instructions have to carry it.
+	for _, text := range []string{empty, got} {
+		for _, want := range []string{"parent_index", "depends_on_indexes", "tix_reorder"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("instructions = %q, want them to explain %q", text, want)
+			}
+		}
+	}
 }
 
 func TestNewServerCarriesInstructions(t *testing.T) {
@@ -224,6 +233,78 @@ func TestAddBatchCreatesEpicWithChildren(t *testing.T) {
 	}
 }
 
+func TestAddBatchWiresDependenciesAndExistingEpics(t *testing.T) {
+	setupTestDB(t)
+
+	if _, _, err := tix.EnsureProject("acme"); err != nil {
+		t.Fatalf("EnsureProject: %v", err)
+	}
+	epicID, err := tix.Add("existing epic", "b", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	epic := int(epicID)
+
+	_, _, err = addBatchTool(context.Background(), nil, addBatchArgs{
+		Project: "acme",
+		Tickets: []batchTicket{
+			{Title: "schema", Body: "b", ParentID: &epic},
+			{Title: "api", Body: "b", ParentID: &epic, DependsOnIndexes: []int{0}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("addBatchTool: %v", err)
+	}
+
+	tickets, err := tix.ListTickets(tix.ListOptions{Project: "acme", ParentID: &epic, ShowAll: true})
+	if err != nil {
+		t.Fatalf("ListTickets: %v", err)
+	}
+	if len(tickets) != 2 {
+		t.Fatalf("got %d children of the existing epic, want 2", len(tickets))
+	}
+	api, err := tix.Show(tickets[1].ID)
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	if api.Status != "blocked" || len(api.DependsOnIDs) != 1 || api.DependsOnIDs[0] != tickets[0].ID {
+		t.Fatalf("api = status %q depends_on %v, want blocked on %d", api.Status, api.DependsOnIDs, tickets[0].ID)
+	}
+}
+
+func TestReorderToolSetsWorkOrder(t *testing.T) {
+	setupTestDB(t)
+
+	_, _, err := addBatchTool(context.Background(), nil, addBatchArgs{
+		Project: "acme",
+		Create:  true,
+		Tickets: []batchTicket{{Title: "first", Body: "b"}, {Title: "second", Body: "b"}},
+	})
+	if err != nil {
+		t.Fatalf("addBatchTool: %v", err)
+	}
+	before, err := tix.ListTickets(tix.ListOptions{Project: "acme"})
+	if err != nil {
+		t.Fatalf("ListTickets: %v", err)
+	}
+
+	res, _, err := reorderTool(context.Background(), nil, reorderArgs{IDs: []int{before[1].ID, before[0].ID}})
+	if err != nil {
+		t.Fatalf("reorderTool: %v", err)
+	}
+	if want := fmt.Sprintf("reordered: %d -> %d", before[1].ID, before[0].ID); resultText(t, res) != want {
+		t.Fatalf("reply = %q, want %q", resultText(t, res), want)
+	}
+
+	after, err := tix.ListTickets(tix.ListOptions{Project: "acme"})
+	if err != nil {
+		t.Fatalf("ListTickets: %v", err)
+	}
+	if after[0].Title != "second" || after[1].Title != "first" {
+		t.Fatalf("order = %q, %q; want second, first", after[0].Title, after[1].Title)
+	}
+}
+
 func TestAddBatchRejectsBadBatchWholesale(t *testing.T) {
 	setupTestDB(t)
 
@@ -269,6 +350,22 @@ func TestAddBatchRejectsBadBatchWholesale(t *testing.T) {
 				{Title: "epic", Body: "b", ParentIndex: ptr(0)},
 			}},
 			want: "parent_index must identify an earlier ticket",
+		},
+		{
+			name: "dependency is not earlier",
+			args: addBatchArgs{Project: "batch", Create: true, Tickets: []batchTicket{
+				{Title: "a", Body: "b", DependsOnIndexes: []int{1}},
+				{Title: "b", Body: "b"},
+			}},
+			want: "tickets[0]: depends_on_indexes must identify earlier tickets",
+		},
+		{
+			name: "both parent forms",
+			args: addBatchArgs{Project: "batch", Create: true, Tickets: []batchTicket{
+				{Title: "epic", Body: "b"},
+				{Title: "child", Body: "b", ParentIndex: ptr(0), ParentID: ptr(99)},
+			}},
+			want: "use either parent_index or parent_id",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

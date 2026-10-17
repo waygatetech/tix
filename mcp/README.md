@@ -17,6 +17,7 @@ It calls the same `internal/tix` library functions the CLI uses, and talks to th
 | `tix_show`       | Show a single ticket by id.                                        |
 | `tix_edit`       | Edit fields of an existing ticket.                                 |
 | `tix_note`       | Append a handoff note; `tix_show` prints a ticket's notes.         |
+| `tix_reorder`    | Set the work order of tickets within a priority.                   |
 | `tix_projects`   | List all projects with ticket counts per status.                   |
 
 `tix_search` is the one to reach for before filing: past about fifty tickets, nobody — least of all a client that files independently of whoever works the backlog — can hold the list in their head, and a duplicate costs more to notice later than the call costs now. It searches every status, because work that already shipped makes a new ticket just as redundant as an open one does.
@@ -62,7 +63,29 @@ the epic's generated database id:
 ```
 
 `parent_index` must point to an earlier item, which keeps the batch order
-unambiguous and prevents cycles.
+unambiguous and prevents cycles. To file new tickets under an epic that already
+exists, use `parent_id` instead.
+
+Dependencies work the same way: `depends_on_indexes` names earlier tickets in
+the batch, `depends_on_ids` names existing ones, and a ticket with unfinished
+dependencies is created `blocked`. Within a priority, tickets are worked in the
+order they were filed, so list a batch in the order it should be done;
+`tix_reorder` changes the order afterwards.
+
+```json
+{
+  "project": "tix",
+  "tickets": [
+    { "title": "Polls", "body": "Epic." },
+    { "title": "Poll model and voting", "body": "…", "parent_index": 0 },
+    { "title": "Live results over SSE", "body": "…", "parent_index": 0, "depends_on_indexes": [1] }
+  ]
+}
+```
+
+The server's connect-time instructions spell this out, because a client that
+doesn't know tix has epics and dependencies fakes them with title prefixes like
+`[POLL-1]` and prose in the body, which nothing in tix can read back.
 
 A batch is validated whole before anything is written, so a missing title in the fifth ticket rejects the call naming `tickets[4]` and leaves no half-written batch behind — and no newly created project either, even with `create: true`. If a write does fail partway (a database error rather than bad input), the error says how many tickets already landed and the payload still lists them, so the retry can skip those instead of duplicating them.
 
