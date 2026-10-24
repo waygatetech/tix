@@ -574,5 +574,24 @@ printf '#!/bin/sh\ncat >/dev/null\n[ "$TIX_HOOK" = approve ]\n' >"$sbx_repo/.tix
 check "approve passes when the approve hook passes" "approved plan" env HOME="$tmp/plan-home" "$tmp/tix" approve "$sp_id"
 check_absent "queue drops an approved plan" "sp-$sp_id" "$tmp/tix" queue
 
+# add --dry-run runs every add check and writes nothing; --json prints the ticket
+"$tmp/tix" projects add dryrun >/dev/null
+check_status "add --dry-run passes valid input" 0 "$tmp/tix" add --project dryrun "would add" -b "body" --dry-run
+check "add --dry-run --json prints the would-be ticket" '{"title":"would add","body":"body","status":"open","priority":3,"project":"dryrun"}' "$tmp/tix" add --project dryrun "would add" -b "body" -p 3 --dry-run --json --compact
+check_absent "add --dry-run writes no ticket" "would add" "$tmp/tix" list --project dryrun
+check "add --dry-run reports a missing body" "Error: ticket body is required" "$tmp/tix" add --project dryrun "x" --dry-run
+check_status "add --dry-run fails on a missing body" 1 "$tmp/tix" add --project dryrun "x" --dry-run
+check "add --dry-run reports an unknown project" "Error: add failed: unknown project" "$tmp/tix" add --project nosuchproj "x" -b "b" --dry-run
+check_status "add --dry-run fails on an unknown parent" 1 "$tmp/tix" add --project dryrun "x" -b "b" --parent 999999 --dry-run
+check "add --dry-run reports an unknown dependency" "no such ticket: 999999" "$tmp/tix" add --project dryrun "x" -b "b" --depends-on 999999 --dry-run
+check "add --dry-run reports an out-of-range priority" "Error: add failed: priority must be between 0 and 5, got 9" "$tmp/tix" add --project dryrun "x" -b "b" -p 9 --dry-run
+check_status "add --dry-run refuses --create" 1 "$tmp/tix" add --project dryrun "x" -b "b" --dry-run --create
+check "add -p 9 errors instead of defaulting" "priority must be between 0 and 5, got 9" "$tmp/tix" add --project dryrun "x" -b "b" -p 9
+check "add -p -1 errors instead of defaulting" "priority must be between 0 and 5, got -1" "$tmp/tix" add --project dryrun "x" -b "b" -p -1
+check_absent "out-of-range adds write nothing" '"title":"x"' "$tmp/tix" list --project dryrun --json --compact
+dry_json=$("$tmp/tix" add --project dryrun "real add" -b "body" --json --compact)
+dry_id=$(sed -E 's/^\{"id":([0-9]+),.*/\1/' <<<"$dry_json")
+check "add --json matches show --json" "$dry_json" "$tmp/tix" show "$dry_id" --json --compact
+
 echo
 echo "all $pass checks passed"

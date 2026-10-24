@@ -153,6 +153,59 @@ func TestAddListNextAndProjectIsolation(t *testing.T) {
 	}
 }
 
+func TestAddChecksPriorityRange(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	for _, tc := range []struct {
+		priority int
+		wantErr  bool
+	}{
+		{-1, true},
+		{0, false},
+		{5, false},
+		{6, true},
+	} {
+		t.Run(fmt.Sprint(tc.priority), func(t *testing.T) {
+			_, err := Add("t", "b", tc.priority, "acme", nil)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Add priority %d err = %v, want error %v", tc.priority, err, tc.wantErr)
+			}
+		})
+	}
+	tickets, err := AllTickets()
+	if err != nil {
+		t.Fatalf("AllTickets: %v", err)
+	}
+	if len(tickets) != 2 {
+		t.Fatalf("got %d tickets, want only the 2 in-range adds written", len(tickets))
+	}
+}
+
+func TestNewTicketWritesNothing(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	depID, err := Add("dep", "b", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add dep: %v", err)
+	}
+	ticket, err := NewTicket("t", "b", 1, "acme", nil, int(depID))
+	if err != nil {
+		t.Fatalf("NewTicket: %v", err)
+	}
+	if ticket.ID != 0 || ticket.Status != "blocked" || ticket.Priority != 1 {
+		t.Fatalf("NewTicket = %+v, want no id, blocked, P1", ticket)
+	}
+	tickets, err := AllTickets()
+	if err != nil {
+		t.Fatalf("AllTickets: %v", err)
+	}
+	if len(tickets) != 1 {
+		t.Fatalf("got %d tickets, want NewTicket to write none", len(tickets))
+	}
+}
+
 func TestReadsNullUpdatedAtAsCreatedAt(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")

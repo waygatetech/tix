@@ -16,6 +16,7 @@ var bodyFile string
 var createProject bool
 var parentRef string
 var dependsOnRefs []string
+var addDryRun bool
 
 var addCmd = &cobra.Command{
 	Use:               "add",
@@ -40,9 +41,8 @@ var addCmd = &cobra.Command{
 			return errors.New("ticket body is required")
 		}
 
-		if priority < 0 || priority > 5 {
-			// default to low priority
-			priority = 2
+		if addDryRun && createProject {
+			return errors.New("--dry-run cannot be combined with --create")
 		}
 
 		title := args[0]
@@ -60,7 +60,7 @@ var addCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			if created {
+			if created && !jsonOutput {
 				fmt.Printf("created project %s\n", resolved)
 			}
 			project = resolved
@@ -79,9 +79,27 @@ var addCmd = &cobra.Command{
 			return err
 		}
 
+		if addDryRun {
+			ticket, err := tix.NewTicket(title, body, priority, project, parentID, dependsOnIDs...)
+			if err != nil {
+				return fmt.Errorf("add failed: %w", err)
+			}
+			if jsonOutput {
+				return printJSON(ticket, compactOutput, fieldsOutput)
+			}
+			return nil
+		}
+
 		id, err := tix.Add(title, body, priority, project, parentID, dependsOnIDs...)
 		if err != nil {
 			return fmt.Errorf("add failed: %w", err)
+		}
+		if jsonOutput {
+			ticket, err := tix.Show(int(id))
+			if err != nil {
+				return err
+			}
+			return printJSON(ticket, compactOutput, fieldsOutput)
 		}
 		prefix, err := tix.PrefixFor(project)
 		if err != nil {
@@ -100,5 +118,9 @@ func init() {
 	addCmd.Flags().IntVarP(&priority, "priority", "p", 2, "ticket priority")
 	addCmd.Flags().StringVar(&parentRef, "parent", "", "parent ticket to group this one under (epic)")
 	addCmd.Flags().StringSliceVar(&dependsOnRefs, "depends-on", nil, "ticket this one depends on; repeat or comma-separate for more")
+	addCmd.Flags().BoolVar(&addDryRun, "dry-run", false, "run every check and write nothing; exit non-zero if the add would fail")
+	addCmd.Flags().BoolVar(&jsonOutput, "json", false, "output the created ticket as JSON (with --dry-run, the ticket that would be created)")
+	addCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")
+	addCmd.Flags().StringVar(&fieldsOutput, "fields", "", "comma-separated JSON fields to include")
 	rootCmd.AddCommand(addCmd)
 }

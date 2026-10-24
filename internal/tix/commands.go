@@ -13,7 +13,7 @@ import (
 )
 
 type Ticket struct {
-	ID       int    `json:"id"`
+	ID       int    `json:"id,omitzero"`
 	Title    string `json:"title"`
 	Body     string `json:"body,omitempty"`
 	Status   string `json:"status"`
@@ -41,8 +41,8 @@ type Ticket struct {
 	Concepts []string `json:"concepts,omitempty"`
 	// CreatedAt and UpdatedAt are stored UTC, and UpdatedAt moves on every
 	// write, so how long a ticket has sat in its current status is answerable.
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at,omitzero"`
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
 }
 
 // ticketColumns is the select list every ticket read shares, paired with
@@ -102,25 +102,47 @@ type ListOptions struct {
 	Concepts []string
 }
 
-func Add(title, body string, priority int, project string, parentID *int, dependsOnIDs ...int) (int64, error) {
+// NewTicket runs every check Add runs and returns the ticket Add would insert,
+// without writing anything. It has no id or timestamps yet.
+func NewTicket(title, body string, priority int, project string, parentID *int, dependsOnIDs ...int) (Ticket, error) {
+	if priority < 0 || priority > 5 {
+		return Ticket{}, fmt.Errorf("priority must be between 0 and 5, got %d", priority)
+	}
 	project, err := ResolveProject(project)
 	if err != nil {
-		return 0, err
+		return Ticket{}, err
 	}
 	if parentID != nil {
 		if err := checkParent(*parentID, project); err != nil {
-			return 0, err
+			return Ticket{}, err
 		}
 	}
 	if err := checkDependencies(0, project, dependsOnIDs); err != nil {
-		return 0, err
+		return Ticket{}, err
 	}
 	status := "open"
 	if blocked, err := hasUnfinishedDependencies(dependsOnIDs); err != nil {
-		return 0, err
+		return Ticket{}, err
 	} else if blocked {
 		status = "blocked"
 	}
+	return Ticket{
+		Title:        title,
+		Body:         body,
+		Status:       status,
+		Priority:     priority,
+		Project:      project,
+		ParentID:     parentID,
+		DependsOnIDs: dependsOnIDs,
+	}, nil
+}
+
+func Add(title, body string, priority int, project string, parentID *int, dependsOnIDs ...int) (int64, error) {
+	ticket, err := NewTicket(title, body, priority, project, parentID, dependsOnIDs...)
+	if err != nil {
+		return 0, err
+	}
+	status, project := ticket.Status, ticket.Project
 
 	var maxRank int
 	db.QueryRow(`SELECT COALESCE(MAX(order_rank), 0) FROM tickets`).Scan(&maxRank)
