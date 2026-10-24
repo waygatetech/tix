@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/waygatetech/tix/internal/tix"
@@ -23,10 +24,6 @@ var addCmd = &cobra.Command{
 	Short:             "Add a ticket to the list",
 	PersistentPreRunE: initDB,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 {
-			return errors.New("ticket title is required")
-		}
-
 		if body != "" && bodyFile != "" {
 			return errors.New("use either --body or --body-file, not both")
 		}
@@ -37,17 +34,13 @@ var addCmd = &cobra.Command{
 			}
 			body = string(data)
 		}
-		if body == "" {
-			return errors.New("ticket body is required")
+		title := strings.Join(args, " ")
+		if err := tix.CheckDraft(title, body); err != nil {
+			return err
 		}
 
 		if addDryRun && createProject {
 			return errors.New("--dry-run cannot be combined with --create")
-		}
-
-		title := args[0]
-		for _, a := range args[1:] {
-			title += " " + a
 		}
 
 		project, err := projectScope()

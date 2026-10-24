@@ -593,5 +593,14 @@ dry_json=$("$tmp/tix" add --project dryrun "real add" -b "body" --json --compact
 dry_id=$(sed -E 's/^\{"id":([0-9]+),.*/\1/' <<<"$dry_json")
 check "add --json matches show --json" "$dry_json" "$tmp/tix" show "$dry_id" --json --compact
 
+# tix rules prints the ticket template and the rule registry; add errors cite rule ids
+check "rules prints the template" "## Acceptance criteria" "$tmp/tix" rules
+check "rules prints every rule" "- priority-range (priority, error):" "$tmp/tix" rules
+check "rules --json has the template" '{"template":"## Context' "$tmp/tix" rules --json --compact
+check "rules --json lists rules" '{"id":"title-required","field":"title","description":"A ticket needs a non-empty title.","severity":"error"}' "$tmp/tix" rules --json --compact
+check "add without a title cites its rule" "ticket title is required [title-required]" "$tmp/tix" add --project dryrun
+check "add without a body cites its rule" "ticket body is required [body-required]" "$tmp/tix" add --project dryrun "x"
+check "add with -p 9 cites its rule" "got 9 [priority-range]" "$tmp/tix" add --project dryrun "x" -b "b" -p 9
+
 echo
 echo "all $pass checks passed"

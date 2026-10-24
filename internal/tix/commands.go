@@ -106,7 +106,7 @@ type ListOptions struct {
 // without writing anything. It has no id or timestamps yet.
 func NewTicket(title, body string, priority int, project string, parentID *int, dependsOnIDs ...int) (Ticket, error) {
 	if priority < 0 || priority > 5 {
-		return Ticket{}, fmt.Errorf("priority must be between 0 and 5, got %d", priority)
+		return Ticket{}, violation("priority-range", "priority must be between 0 and 5, got %d", priority)
 	}
 	project, err := ResolveProject(project)
 	if err != nil {

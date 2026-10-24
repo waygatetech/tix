@@ -45,3 +45,5 @@ workflow-metrics:
   module: internal/tix/stats.go
 review-capacity:
   module: internal/tix/commands.go
+ticket-rules:
+  module: internal/tix/rules.go

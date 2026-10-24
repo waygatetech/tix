@@ -211,11 +211,8 @@ type addArgs struct {
 }
 
 func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.CallToolResult, any, error) {
-	if args.Title == "" {
-		return nil, nil, fmt.Errorf("title is required")
-	}
-	if args.Body == "" {
-		return nil, nil, fmt.Errorf("body is required")
+	if err := tix.CheckDraft(args.Title, args.Body); err != nil {
+		return nil, nil, err
 	}
 	if args.Project == "" {
 		return nil, nil, fmt.Errorf("project is required")
@@ -282,11 +279,8 @@ func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) 
 	// Validate the whole batch before writing any of it: a batch that is going
 	// to be rejected should be rejected whole, not half-inserted.
 	for i, ticket := range args.Tickets {
-		if ticket.Title == "" {
-			return nil, nil, fmt.Errorf("tickets[%d]: title is required", i)
-		}
-		if ticket.Body == "" {
-			return nil, nil, fmt.Errorf("tickets[%d]: body is required", i)
+		if err := tix.CheckDraft(ticket.Title, ticket.Body); err != nil {
+			return nil, nil, fmt.Errorf("tickets[%d]: %w", i, err)
 		}
 		if ticket.ParentIndex != nil && (*ticket.ParentIndex < 0 || *ticket.ParentIndex >= i) {
 			return nil, nil, fmt.Errorf("tickets[%d]: parent_index must identify an earlier ticket in the batch", i)

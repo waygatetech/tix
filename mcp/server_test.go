@@ -334,7 +334,7 @@ func TestAddBatchRejectsBadBatchWholesale(t *testing.T) {
 				{Title: "ok", Body: "b"},
 				{Body: "b"},
 			}},
-			want: "tickets[1]: title is required",
+			want: "tickets[1]: ticket title is required [title-required]",
 		},
 		{
 			name: "missing body",
@@ -342,7 +342,7 @@ func TestAddBatchRejectsBadBatchWholesale(t *testing.T) {
 				{Title: "ok", Body: "b"},
 				{Title: "no body"},
 			}},
-			want: "tickets[1]: body is required",
+			want: "tickets[1]: ticket body is required [body-required]",
 		},
 		{
 			name: "parent is not earlier",
@@ -539,12 +539,12 @@ func TestAddRejectsIncompleteTickets(t *testing.T) {
 		{
 			name: "no title",
 			args: addArgs{Body: "b", Project: "acme", Create: true},
-			want: "title is required",
+			want: "ticket title is required [title-required]",
 		},
 		{
 			name: "no body",
 			args: addArgs{Title: "t", Project: "acme", Create: true},
-			want: "body is required",
+			want: "ticket body is required [body-required]",
 		},
 		{
 			name: "no project",

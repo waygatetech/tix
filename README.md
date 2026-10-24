@@ -104,6 +104,7 @@ tix stale --project acme
 - `tix web [--port N] [--global]` — serve the cross-project dashboard at `http://localhost:7433`.
 - `tix web install|uninstall|status [--port N]` — run that dashboard as a macOS login agent, always available at `http://tix.local:7433`.
 - `tix best-practices [--json] [--compact] [--fields FIELDS]` — print terse workflow guidance, handy for scripting or onboarding an AI agent.
+- `tix rules [--json] [--compact]` — print the canonical ticket template (Context / Scope / Out of scope / Acceptance criteria / Relevant rules) and the rules drafts are checked against, as markdown ready to paste into a prompt. `--json` prints `{"template": string, "rules": [{"id": string, "field": string, "description": string, "severity": "error" | "warning"}]}`. A check that fails names its rule id in brackets, e.g. `ticket body is required [body-required]`.
 - `tix mcp` — run an MCP server on stdio exposing the ticket operations as tools, for MCP clients like Claude Desktop. See [mcp/README.md](mcp/README.md).
 - `tix init-agent PROJECT [--db PATH]` — append idempotent `tix` workflow guidance to `AGENTS.md` and `CLAUDE.md` at the current Git repository root (or the current directory), so coding agents know how to use `tix` in this repo.
 
