@@ -123,13 +123,22 @@ func ticketDir(ctx context.Context, repo, ref string) string {
 		return repo
 	}
 	candidate := filepath.Join(repo, worktreesDir, ref)
-	want, err := filepath.EvalSymlinks(candidate)
+	if isWorktree(ctx, repo, candidate) {
+		return candidate
+	}
+	return repo
+}
+
+// isWorktree reports whether git lists dir as a worktree of repo, the main
+// checkout included.
+func isWorktree(ctx context.Context, repo, dir string) bool {
+	want, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return repo
+		return false
 	}
 	list, err := git(ctx, repo, "worktree", "list", "--porcelain")
 	if err != nil {
-		return repo
+		return false
 	}
 	for _, line := range strings.Split(list, "\n") {
 		path, ok := strings.CutPrefix(line, "worktree ")
@@ -137,10 +146,35 @@ func ticketDir(ctx context.Context, repo, ref string) string {
 			continue
 		}
 		if got, err := filepath.EvalSymlinks(path); err == nil && got == want {
-			return candidate
+			return true
 		}
 	}
-	return repo
+	return false
+}
+
+// linkedWorktree is the root of the checkout holding dir when it is a linked
+// worktree of repo, else "". The main checkout is not linked, so callers there
+// keep falling back to ticketDir.
+func linkedWorktree(ctx context.Context, repo, dir string) string {
+	if repo == "" || dir == "" {
+		return ""
+	}
+	top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return ""
+	}
+	top = strings.TrimSpace(top)
+	gotTop, err := filepath.EvalSymlinks(top)
+	if err != nil {
+		return ""
+	}
+	if gotRepo, err := filepath.EvalSymlinks(repo); err != nil || gotRepo == gotTop {
+		return ""
+	}
+	if !isWorktree(ctx, repo, top) {
+		return ""
+	}
+	return top
 }
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {

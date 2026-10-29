@@ -59,7 +59,7 @@ func TestAuditRecordsReverts(t *testing.T) {
 			if tt.commitBefore {
 				sha = commit()
 			}
-			if err := RunDone(ctx, id); err != nil {
+			if err := RunDone(ctx, id, ""); err != nil {
 				t.Fatalf("RunDone: %v", err)
 			}
 			if !tt.commitBefore {

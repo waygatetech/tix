@@ -50,7 +50,7 @@ func TestRunDoneRecordsAttempts(t *testing.T) {
 				}
 			}
 
-			err = RunDone(context.Background(), id)
+			err = RunDone(context.Background(), id, "")
 			if (err != nil) != (tt.wantStatus != "done") {
 				t.Fatalf("RunDone err = %v, want error only when the ticket stays open", err)
 			}
@@ -130,7 +130,7 @@ func TestRunDoneInWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := RunDone(context.Background(), id); err != nil {
+	if err := RunDone(context.Background(), id, ""); err != nil {
 		t.Fatalf("RunDone: %v", err)
 	}
 	events, err := Events(id)
@@ -147,5 +147,70 @@ func TestRunDoneInWorktree(t *testing.T) {
 	}
 	if done.Branch != ref {
 		t.Fatalf("done event branch = %q, want %q", done.Branch, ref)
+	}
+}
+
+func TestRunDoneFromCwdWorktree(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("HOME", t.TempDir())
+	if _, err := CreateProject(Project{Name: "acme", Key: "ac"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	repo, run := gitRepo(t)
+	if _, err := db.Exec(`UPDATE projects SET repo_path = ? WHERE name = 'acme'`, repo); err != nil {
+		t.Fatal(err)
+	}
+	// A worktree outside .worktrees/<ref>, as Claude Code or a person makes them.
+	other := filepath.Join(t.TempDir(), "elsewhere")
+	run(repo, "worktree", "add", "-q", other, "-b", "elsewhere")
+	sub := filepath.Join(other, "deep")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		cwd  string
+		// ticketBranch means the ticket's own .worktrees/<ref> branch.
+		want string
+	}{
+		{"linked worktree subdir wins", sub, "elsewhere"},
+		{"main checkout falls back to the ticket worktree", repo, "ticketBranch"},
+		{"unrelated dir falls back to the ticket worktree", t.TempDir(), "ticketBranch"},
+		{"no cwd falls back to the ticket worktree", "", "ticketBranch"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id64, err := Add(tt.name, "", 1, "acme", nil)
+			if err != nil {
+				t.Fatalf("Add: %v", err)
+			}
+			id := int(id64)
+			ref := FormatID("ac", id)
+			run(repo, "worktree", "add", "-q", filepath.Join(worktreesDir, ref), "-b", ref)
+			want := tt.want
+			if want == "ticketBranch" {
+				want = ref
+			}
+
+			if err := RunDone(context.Background(), id, tt.cwd); err != nil {
+				t.Fatalf("RunDone: %v", err)
+			}
+			events, err := Events(id)
+			if err != nil {
+				t.Fatalf("Events: %v", err)
+			}
+			var done doneCommit
+			for _, e := range events {
+				if e.Event == "done" {
+					if err := json.Unmarshal(e.Data, &done); err != nil {
+						t.Fatalf("done data: %v", err)
+					}
+				}
+			}
+			if done.Branch != want {
+				t.Fatalf("done event branch = %q, want %q", done.Branch, want)
+			}
+		})
 	}
 }

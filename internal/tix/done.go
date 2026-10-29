@@ -59,11 +59,14 @@ func headCommit(ctx context.Context, repo string) *doneCommit {
 }
 
 // RunDone runs the project's done hook (.tix/done-hook in its repo, else
-// ~/.tix/done-hook) with the ticket ID as its argument, from the ticket's
-// worktree when it has one, else the repo directory. A failing hook records a failed done_attempt and leaves the
-// ticket open; a passing one, or no hook, records a pass and closes it, with
-// that checkout's HEAD on the done event.
-func RunDone(ctx context.Context, id int) error {
+// ~/.tix/done-hook) with the ticket ID as its argument. It runs from cwd when
+// cwd is inside a linked worktree of the project's repo, else from the ticket's
+// .worktrees/<ref> worktree when it has one, else the repo directory. Pass ""
+// for cwd when the caller's directory says nothing about the ticket. A failing
+// hook records a failed done_attempt and leaves the ticket open; a passing one,
+// or no hook, records a pass and closes it, with that checkout's HEAD on the
+// done event.
+func RunDone(ctx context.Context, id int, cwd string) error {
 	ticket, err := Show(id)
 	if err != nil {
 		return err
@@ -80,7 +83,11 @@ func RunDone(ctx context.Context, id int) error {
 	if err != nil {
 		return err
 	}
-	repo = ticketDir(ctx, repo, FormatID(prefix, id))
+	if wt := linkedWorktree(ctx, repo, cwd); wt != "" {
+		repo = wt
+	} else {
+		repo = ticketDir(ctx, repo, FormatID(prefix, id))
+	}
 	attempt := doneAttempt{Result: "pass"}
 	if hook == "" {
 		return closeTicket(id, &attempt, headCommit(ctx, repo))
