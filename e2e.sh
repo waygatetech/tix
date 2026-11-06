@@ -475,6 +475,26 @@ check "stats emits JSON" '"total"' "$tmp/tix" stats --project reverty --json
 check "stats rejects an unknown grouping" "unknown --by" "$tmp/tix" stats --by month
 check "stats rejects a bad window" "invalid --since" "$tmp/tix" stats --since soon
 
+# claim takes a named ticket through the same guard, event, and caps as claim-next
+"$tmp/tix" projects add claimy --key cly >/dev/null
+claim_id() { "$tmp/tix" add --project claimy "$1" -b body --json --compact --fields id | tr -dc '0-9'; }
+claim_first=$(claim_id "first claim")
+claim_second=$(claim_id "second claim")
+claim_third=$(claim_id "third claim")
+check "claim takes a prefixed id" '"status":"in_progress"' "$tmp/tix" claim "cly-$claim_first" --json --compact
+check "claim names the status it refuses" "is in_progress" "$tmp/tix" claim "$claim_first"
+check_status "claim refuses a claimed ticket" 1 "$tmp/tix" claim "$claim_first"
+check_status "claim rejects a mismatched --project" 1 "$tmp/tix" claim "$claim_second" --project zen
+check_status "claim rejects an unknown ticket" 1 "$tmp/tix" claim 99999
+check_status "claim exits 4 at capacity" 4 env TIX_MAX_ACTIVE=1 "$tmp/tix" claim "$claim_second"
+check "claim lists what is waiting on review" "first claim" env TIX_MAX_ACTIVE=1 "$tmp/tix" claim "$claim_second"
+check "claim at capacity leaves the ticket open" '"status":"open"' "$tmp/tix" show "$claim_second" --json --compact --fields status
+check "claim takes a bare id and prints the ticket" "cly-$claim_second [P2] second claim" "$tmp/tix" claim "$claim_second"
+check "claim supports JSON field selection" "{\"id\":$claim_third}" "$tmp/tix" claim "$claim_third" --json --compact --fields id
+mkdir -p "$tmp/claim-home"
+HOME="$tmp/claim-home" "$tmp/tix" done "$claim_first" >/dev/null
+check "stats counts cycle time for a claimed ticket" '"cycle_p50_hours"' "$tmp/tix" stats --project claimy --json --compact
+
 # web: the dashboard is the one view that needs every project at once, and its
 # page is a template the compiler cannot check, so serve it for real and look
 web_port=$((20000 + RANDOM % 20000))

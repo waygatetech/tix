@@ -1,9 +1,11 @@
 package tix
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1297,6 +1299,146 @@ func TestRejectAndReopen(t *testing.T) {
 			t.Fatalf("err = %v, want lease conflict", err)
 		}
 	})
+}
+
+func TestClaim(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     string
+		wantStatus string
+		wantErr    string
+	}{
+		{name: "open ticket is claimed", status: "open", wantStatus: "in_progress"},
+		{name: "in_progress is refused", status: "in_progress", wantStatus: "in_progress", wantErr: "is in_progress"},
+		{name: "blocked is refused", status: "blocked", wantStatus: "blocked", wantErr: "is blocked"},
+		{name: "done is refused", status: "done", wantStatus: "done", wantErr: "is done"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupTestDB(t)
+			t.Setenv("TIX_MAX_ACTIVE", "0")
+			newProjects(t, "acme")
+			id64, err := Add("ticket", "", 2, "acme", nil)
+			if err != nil {
+				t.Fatalf("Add: %v", err)
+			}
+			id := int(id64)
+			if _, err := db.Exec(`UPDATE tickets SET status = ? WHERE id = ?`, tt.status, id); err != nil {
+				t.Fatalf("setting status: %v", err)
+			}
+
+			claimed, err := Claim(id)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Claim: %v", err)
+				}
+				if claimed.ID != id || claimed.Status != "in_progress" {
+					t.Fatalf("Claim = %+v, want ticket %d in_progress", claimed, id)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Claim error = %v, want it to contain %q", err, tt.wantErr)
+			}
+
+			ticket, err := Show(id)
+			if err != nil {
+				t.Fatalf("Show: %v", err)
+			}
+			if ticket.Status != tt.wantStatus {
+				t.Errorf("status = %q, want %q", ticket.Status, tt.wantStatus)
+			}
+			events, err := Events(id)
+			if err != nil {
+				t.Fatalf("Events: %v", err)
+			}
+			claims := 0
+			for _, e := range events {
+				if e.Event == "claim" {
+					claims++
+				}
+			}
+			wantClaims := 0
+			if tt.wantErr == "" {
+				wantClaims = 1
+			}
+			if claims != wantClaims {
+				t.Errorf("claim events = %d, want %d", claims, wantClaims)
+			}
+		})
+	}
+}
+
+func TestClaimUnknownTicket(t *testing.T) {
+	setupTestDB(t)
+	if _, err := Claim(999); err == nil {
+		t.Fatal("Claim(999) succeeded, want an error")
+	}
+}
+
+func TestClaimAtCapacityLeavesTicketOpen(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("TIX_MAX_ACTIVE", "1")
+	newProjects(t, "acme")
+	for _, title := range []string{"active", "waiting"} {
+		if _, err := Add(title, "", 2, "acme", nil); err != nil {
+			t.Fatalf("Add(%s): %v", title, err)
+		}
+	}
+	active, err := ClaimNext("acme")
+	if err != nil {
+		t.Fatalf("ClaimNext: %v", err)
+	}
+	waitingID := active.ID + 1
+
+	_, err = Claim(waitingID)
+	var full *AtCapacityError
+	if !errors.As(err, &full) {
+		t.Fatalf("Claim error = %v, want *AtCapacityError", err)
+	}
+	if len(full.Waiting) != 1 || full.Waiting[0].ID != active.ID {
+		t.Errorf("Waiting = %+v, want ticket %d", full.Waiting, active.ID)
+	}
+	ticket, err := Show(waitingID)
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	if ticket.Status != "open" {
+		t.Errorf("status = %q, want open", ticket.Status)
+	}
+}
+
+func TestClaimConcurrentlySucceedsOnce(t *testing.T) {
+	setupTestDB(t)
+	t.Setenv("TIX_MAX_ACTIVE", "0")
+	newProjects(t, "acme")
+	id, err := Add("ticket", "", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	const claimers = 8
+	errs := make([]error, claimers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < claimers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[i] = Claim(int(id))
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	wins := 0
+	for _, err := range errs {
+		if err == nil {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Errorf("%d claims succeeded, want exactly 1: %v", wins, errs)
+	}
 }
 
 func TestCheckCapacity(t *testing.T) {

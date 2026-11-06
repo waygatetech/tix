@@ -1096,6 +1096,23 @@ func ClaimNextEvaluated(ctx context.Context, project string) (Ticket, *JevEvalua
 	return ticket, &evaluation, nil
 }
 
+// Claim moves one named ticket to in_progress. Status is checked before
+// capacity so that a ticket that cannot be claimed anyway reports why, rather
+// than sending the caller off to clear the review queue.
+func Claim(id int) (Ticket, error) {
+	ticket, err := Show(id)
+	if err != nil {
+		return Ticket{}, err
+	}
+	if ticket.Status != "open" {
+		return Ticket{}, fmt.Errorf("ticket %d is %s; only open tickets can be claimed", id, ticket.Status)
+	}
+	if err := CheckCapacity(ticket.Project); err != nil {
+		return Ticket{}, err
+	}
+	return transitionOpenTicket(id, "in_progress")
+}
+
 func claimNext(project string) (Ticket, error) {
 	project, err := ResolveProject(project)
 	if err != nil {

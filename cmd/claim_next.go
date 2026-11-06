@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
@@ -21,19 +20,7 @@ var claimNextCmd = &cobra.Command{
 			return err
 		}
 		if err := tix.CheckCapacity(project); err != nil {
-			var full *tix.AtCapacityError
-			if !errors.As(err, &full) {
-				return err
-			}
-			fmt.Fprintln(os.Stderr, "Waiting on review:")
-			for _, t := range full.Waiting {
-				prefix, err := tix.PrefixFor(t.Project)
-				if err != nil {
-					return err
-				}
-				fmt.Fprintf(os.Stderr, "  %s %s\n", tix.FormatID(prefix, t.ID), t.Title)
-			}
-			return exitError{code: exitAtCapacity, err: err}
+			return capacityExit(err)
 		}
 		ticket, evaluation, err := tix.ClaimNextEvaluated(cmd.Context(), project)
 		if err != nil {
@@ -48,13 +35,8 @@ var claimNextCmd = &cobra.Command{
 			return printJSON(ticket, compactOutput, fieldsOutput)
 		}
 
-		prefix, err := tix.PrefixFor(ticket.Project)
-		if err != nil {
+		if err := printClaimed(ticket); err != nil {
 			return err
-		}
-		fmt.Printf("%s [P%d] %s\n", tix.FormatID(prefix, ticket.ID), ticket.Priority, ticket.Title)
-		if ticket.Body != "" {
-			fmt.Println(ticket.Body)
 		}
 		if ticket.Status == "blocked" && evaluation != nil {
 			fmt.Println("Human input required; ticket left blocked.")
