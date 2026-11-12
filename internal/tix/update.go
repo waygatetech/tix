@@ -65,8 +65,22 @@ func WriteUpdateState(path string, state UpdateState) error {
 	if err != nil {
 		return fmt.Errorf("encoding update state: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	// The background check writes while other commands read, so replace the
+	// file whole rather than let anyone see half of it.
+	tmp, err := os.CreateTemp(filepath.Dir(path), "update-*.json")
+	if err != nil {
+		return fmt.Errorf("creating update state: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
 		return fmt.Errorf("writing update state: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("writing update state: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("replacing update state: %w", err)
 	}
 	return nil
 }

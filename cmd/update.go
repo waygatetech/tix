@@ -55,9 +55,16 @@ func init() {
 
 // resolveVersion prefers the version GoReleaser stamped, then the module
 // version go install records, so `go install ...@vX.Y.Z` builds know what
-// they are.
+// they are. GoReleaser's default stamp drops the tag's leading v, so it is put
+// back to match the module proxy's versions.
 func resolveVersion(stamped string, info *debug.BuildInfo) string {
-	if stamped != "dev" || info == nil {
+	if stamped != "dev" {
+		if tix.ValidRelease("v" + stamped) {
+			return "v" + stamped
+		}
+		return stamped
+	}
+	if info == nil {
 		return stamped
 	}
 	if v := info.Main.Version; v != "" && v != "(devel)" {
@@ -117,10 +124,14 @@ func startUpdateCheck() error {
 
 // maybeCheckForUpdate is the notice and background check every command gets.
 // Failures here never affect the command, so they are dropped. The MCP server
-// is skipped: its clients author tickets and never run tix update.
+// is skipped: its clients author tickets and never run tix update. So is shell
+// completion, which runs on every tab press.
 func maybeCheckForUpdate(args []string, running string) {
-	if len(args) > 0 && (args[0] == updateCheckCommand || args[0] == "mcp") {
-		return
+	if len(args) > 0 {
+		switch args[0] {
+		case updateCheckCommand, "mcp", cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
+			return
+		}
 	}
 	path, err := tix.UpdateStatePath()
 	if err != nil {

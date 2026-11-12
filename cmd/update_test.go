@@ -25,6 +25,8 @@ func TestResolveVersion(t *testing.T) {
 	}{
 		{"go install build", "dev", withVersion("v1.2.3"), "v1.2.3"},
 		{"stamped release wins", "v1.5.0", withVersion("v1.2.3"), "v1.5.0"},
+		{"goreleaser stamp gains its v", "1.5.0", nil, "v1.5.0"},
+		{"other stamp kept", "1.5.0-rc.1", nil, "1.5.0-rc.1"},
 		{"local build", "dev", withVersion("(devel)"), "dev"},
 		{"no build info", "dev", nil, "dev"},
 	}
