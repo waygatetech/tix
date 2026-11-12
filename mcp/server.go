@@ -45,7 +45,7 @@ func NewServer(version string) *mcp.Server {
 			"depends_on_indexes / depends_on_ids. Tickets are worked in the order " +
 			"listed within a priority, so list them in the order they should be done. " +
 			"The project must already exist; call tix_projects to see the " +
-			"names, or pass create=true to make a new one.",
+			"names, or pass create=true to make a new one. " + sizeRule,
 	}, addBatchTool)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -113,7 +113,16 @@ const structureRule = "Tickets have structure; use it instead of encoding it in 
 	"(depends_on_indexes or depends_on_ids) and stays blocked until they are " +
 	"done. Tickets are worked by priority (0 most urgent), then in creation " +
 	"order, so file them in the order they should happen; tix_reorder changes " +
-	"the order afterwards. Plan a whole breakdown in one tix_add_batch call."
+	"the order afterwards. Plan a whole breakdown in one tix_add_batch call. " +
+	sizeRule
+
+// sizeRule says how big a ticket should be, because spec length does not
+// reveal it: a 1,000-character spec can become a 1,000-line change, and a
+// ticket that size is far more expensive to run than two halves.
+const sizeRule = "Size each ticket before filing it: estimate the lines it will change, " +
+	"including tests, and split anything over about 500 into smaller tickets. " +
+	"Keep schema and API work in separate tickets from new UI screens. Never " +
+	"have a ticket depend on one filed after it."
 
 // instructions tells the client which projects it may file against, because
 // nothing else here does: a client that cannot see the list guesses a name, and

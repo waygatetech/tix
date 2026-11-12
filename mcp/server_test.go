@@ -76,7 +76,7 @@ func TestInstructionsNameTheProjectsThatExist(t *testing.T) {
 	// Without the structure rule a client fakes epics and dependencies with
 	// title prefixes, so both lists of instructions have to carry it.
 	for _, text := range []string{empty, got} {
-		for _, want := range []string{"parent_index", "depends_on_indexes", "tix_reorder"} {
+		for _, want := range []string{"parent_index", "depends_on_indexes", "tix_reorder", "about 500", "UI screens", "filed after it"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("instructions = %q, want them to explain %q", text, want)
 			}
@@ -98,6 +98,29 @@ func TestNewServerCarriesInstructions(t *testing.T) {
 	if got := clientSession.InitializeResult().Instructions; !strings.Contains(got, "frontend") {
 		t.Fatalf("instructions the client received = %q, want them to list project %q", got, "frontend")
 	}
+}
+
+// TestAddBatchDescriptionCarriesSizing covers clients that never surface the
+// server instructions: the sizing guidance has to reach them through the tool
+// they file breakdowns with.
+func TestAddBatchDescriptionCarriesSizing(t *testing.T) {
+	setupTestDB(t)
+
+	ctx := context.Background()
+	tools, err := connect(t, ctx).ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name != "tix_add_batch" {
+			continue
+		}
+		if !strings.Contains(tool.Description, sizeRule) {
+			t.Fatalf("tix_add_batch description = %q, want it to carry the sizing rule", tool.Description)
+		}
+		return
+	}
+	t.Fatal("tools/list has no tix_add_batch")
 }
 
 // connect wires a client to a server over the in-memory transport and hands
