@@ -928,7 +928,7 @@ func NextTicket(project string) (Ticket, error) {
 
 // DefaultMaxActive is the global cap on in_progress tickets when TIX_MAX_ACTIVE
 // is unset: more parallel work than a human can review only grows a queue.
-const DefaultMaxActive = 3
+const DefaultMaxActive = 20
 
 // AtCapacityError reports that claiming more work would outrun review.
 // Waiting is the in_progress work the human should get to first.

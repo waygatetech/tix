@@ -1450,7 +1450,7 @@ func TestCheckCapacity(t *testing.T) {
 		wantScope  string
 	}{
 		{name: "no caps", env: "0", claimed: map[string]int{"acme": 5}},
-		{name: "default global cap", env: "", claimed: map[string]int{"acme": 2, "zen": 1}, wantScope: "all projects"},
+		{name: "default global cap", env: "", claimed: map[string]int{"acme": 15, "zen": 5}, wantScope: "all projects"},
 		{name: "under default global cap", env: "", claimed: map[string]int{"acme": 2}},
 		{name: "global cap counts every project", env: "2", claimed: map[string]int{"zen": 2}, wantScope: "all projects"},
 		{name: "project cap", env: "0", projectMax: 2, claimed: map[string]int{"acme": 2}, wantScope: "acme"},

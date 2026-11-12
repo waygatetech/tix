@@ -101,7 +101,7 @@ var projectsSetMaxActiveCmd = &cobra.Command{
 	Use:   "set-max-active NAME N",
 	Short: "Cap a project's in-progress tickets (0 removes the cap)",
 	Long: `claim-next exits 4 instead of claiming once NAME has N tickets in
-progress. TIX_MAX_ACTIVE caps every project together (default 3, 0 disables).
+progress. TIX_MAX_ACTIVE caps every project together (default 20, 0 disables).
 Set N from tix stats review throughput, not by feel.`,
 	Args:              cobra.ExactArgs(2),
 	PersistentPreRunE: initDB,
