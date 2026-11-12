@@ -47,3 +47,6 @@ review-capacity:
   module: internal/tix/commands.go
 ticket-rules:
   module: internal/tix/rules.go
+self-update:
+  owner: brian
+  module: cmd/update.go

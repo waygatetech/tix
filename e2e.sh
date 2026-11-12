@@ -13,6 +13,8 @@ go build -o "$tmp/tix" .
 export TIX_DB="$tmp/tix.db"
 # the suite claims far more than the default cap of 3; the cap gets its own checks
 export TIX_MAX_ACTIVE=0
+# the update check would reach the network
+export TIX_NO_UPDATE=1
 
 pass=0
 check() {
@@ -66,8 +68,8 @@ check_status() {
   fi
 }
 
-# releases stamp main.version through ldflags; an unstamped build says "dev"
-check "--version reports the build" "tix version dev" "$tmp/tix" --version
+# releases stamp main.version through ldflags; other builds report their module or VCS version
+check "--version reports the build" "tix version " "$tmp/tix" --version
 
 # help, version, and completion never open the database, so they keep working
 # when the database path cannot be created
@@ -425,9 +427,9 @@ mkfifo "$mcp_in"
 wait
 
 check "mcp answers initialize over stdio" '"serverInfo":{"name":"tix"' cat "$mcp_out"
-# the version comes off the binary, so an unstamped build reports "dev" here
+# the version comes off the binary, the same one --version reports
 # rather than a number written into the server that release tags would outrun
-check "mcp reports the binary's version" '"version":"dev"' cat "$mcp_out"
+check "mcp reports the binary's version" "\"version\":\"$("$tmp/tix" --version | sed 's/^tix version //')\"" cat "$mcp_out"
 check "mcp advertises ticket tools" '"name":"tix_projects"' cat "$mcp_out"
 
 # the MCP surface is the authoring set only; claiming and closing stay on the

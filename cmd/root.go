@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"os"
+	"runtime/debug"
 
 	"github.com/spf13/cobra"
 	"github.com/waygatetech/tix/internal/tix"
@@ -43,7 +44,9 @@ func initDBWithoutRepoLookup(cmd *cobra.Command, args []string) error {
 // Execute runs the command named on the command line. The version comes from
 // main so release builds can stamp it via ldflags.
 func Execute(version string) {
-	rootCmd.Version = version
+	info, _ := debug.ReadBuildInfo()
+	rootCmd.Version = resolveVersion(version, info)
+	maybeCheckForUpdate(os.Args[1:], rootCmd.Version)
 	err := rootCmd.Execute()
 	var exit exitError
 	if errors.As(err, &exit) {
