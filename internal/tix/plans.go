@@ -36,6 +36,9 @@ type Plan struct {
 	Epic string `json:"epic,omitempty" yaml:"epic"`
 	// Review is the plan hook's ruling, set by tix rather than the file.
 	Review *Review `json:"review,omitempty" yaml:"-"`
+	// CopyOnly is set by tix, never the file: every path matches a glob in the
+	// repo's .tix/copy-paths, so the change is copy rather than code.
+	CopyOnly bool `json:"copy_only,omitempty" yaml:"-"`
 	// Extra holds frontmatter keys tix does not own. Hooks receive them; the
 	// cached plan does not keep them.
 	Extra map[string]any `json:"-" yaml:"-"`
@@ -45,7 +48,7 @@ type Plan struct {
 var planKeys = map[string]bool{
 	"ticket": true, "concepts": true, "new_concepts": true, "paths": true,
 	"contracts_changed": true, "decisions": true, "acceptance": true,
-	"epic": true,
+	"epic": true, "copy_only": true,
 }
 
 // hookInput is the plan as hooks see it: its JSON plus extension keys, with
@@ -125,20 +128,77 @@ func ParsePlan(data []byte) (Plan, error) {
 	return plan, nil
 }
 
-// DefaultPlanPath is where a ticket's plan lives in its project's repo.
+// DefaultPlanPath is where a ticket's plan lives: plans/<key>-<id>.md in its
+// project's repo when that file exists, else ~/.tix/plans/<project>/<key>-<id>.md
+// when that one does. A plan kept outside the repo never lands in the ticket's
+// branch. With neither present, the repo path is returned so the read error
+// names it.
 func DefaultPlanPath(ticket Ticket) (string, error) {
 	repo, err := repoPathFor(ticket.Project)
 	if err != nil {
 		return "", err
 	}
-	if repo == "" {
-		return "", fmt.Errorf("project %q has no repo_path; pass --file", ticket.Project)
-	}
 	prefix, err := PrefixFor(ticket.Project)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(repo, "plans", FormatID(prefix, ticket.ID)+".md"), nil
+	name := FormatID(prefix, ticket.ID) + ".md"
+	var inRepo string
+	if repo != "" {
+		inRepo = filepath.Join(repo, "plans", name)
+		if _, err := os.Stat(inRepo); err == nil {
+			return inRepo, nil
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		outside := filepath.Join(home, tixDirName, "plans", ticket.Project, name)
+		if _, err := os.Stat(outside); err == nil {
+			return outside, nil
+		}
+	}
+	if inRepo == "" {
+		return "", fmt.Errorf("project %q has no repo_path and no %s; pass --file", ticket.Project,
+			filepath.Join("~", tixDirName, "plans", ticket.Project, name))
+	}
+	return inRepo, nil
+}
+
+// copyOnly reports whether every path the plan declares matches a glob in the
+// repo's .tix/copy-paths. A plan with no paths, or a repo with no such file,
+// is not copy-only.
+func copyOnly(repo string, paths []string) (bool, error) {
+	if repo == "" || len(paths) == 0 {
+		return false, nil
+	}
+	globs, err := readGlobs(filepath.Join(repo, tixDirName, "copy-paths"))
+	if err != nil {
+		return false, err
+	}
+	for _, p := range paths {
+		if !matchAny(globs, p) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// readGlobs reads one glob per line, skipping blanks and # comments. A missing
+// file is no globs.
+func readGlobs(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	var globs []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			globs = append(globs, line)
+		}
+	}
+	return globs, nil
 }
 
 func repoPathFor(project string) (string, error) {
@@ -287,6 +347,14 @@ func IndexPlan(ctx context.Context, id int, path string) (Plan, error) {
 			return Plan{}, fmt.Errorf("%s: %w", path, err)
 		}
 		plan.Epic = epic.Ticket
+	}
+
+	repo, err := repoPathFor(ticket.Project)
+	if err != nil {
+		return Plan{}, err
+	}
+	if plan.CopyOnly, err = copyOnly(repo, plan.Paths); err != nil {
+		return Plan{}, err
 	}
 
 	hook, err := planHookPath(ticket.Project)

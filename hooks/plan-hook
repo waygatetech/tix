@@ -6,6 +6,9 @@
 #   tier 0: the plan stays inside its approved epic (.epic is that epic's
 #           frontmatter): no concepts or contracts beyond the epic's, and no
 #           decisions of its own
+#   tier 0: copy_only (tix sets it when every path matches the repo's
+#           .tix/copy-paths) with no new concepts or decisions, even when it
+#           lists contracts_changed: copy edits change description text only
 #   tier 2: the plan adds concepts or changes contracts
 #   tier 1: the plan spans several concepts or leaves decisions open
 #   tier 0: everything else
@@ -17,6 +20,8 @@ exec jq -c '
      and within(.contracts_changed; .epic.contracts_changed)
      and n(.decisions) == 0 then
     {tier: 0, reason: ("inside approved epic " + .epic.ticket)}
+  elif .copy_only == true and n(.new_concepts) == 0 and n(.decisions) == 0 then
+    {tier: 0, reason: "copy-only paths"}
   elif n(.new_concepts) > 0 or n(.contracts_changed) > 0 then
     {tier: 2, reason: "new concepts or changed contracts"}
   elif n(.concepts) > 1 or n(.decisions) > 0 then

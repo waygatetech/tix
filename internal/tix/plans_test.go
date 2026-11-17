@@ -604,3 +604,143 @@ func TestListByConcept(t *testing.T) {
 		})
 	}
 }
+
+func TestPlanCopyOnly(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("the default plan hook needs jq")
+	}
+	defaultHook, err := filepath.Abs("../../hooks/plan-hook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setupTestDB(t)
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	if _, err := CreateProject(Project{Name: "web", Key: "wb", RepoPath: repo}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	for _, dir := range []string{"plans", ".tix"} {
+		if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hook := filepath.Join(repo, ".tix", "plan-hook")
+	script := "#!/bin/sh\ntee \"$0.in\" | sh '" + defaultHook + "'\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copyPaths := filepath.Join(repo, ".tix", "copy-paths")
+	id64, err := Add("copy change", "", 1, "web", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	id := int(id64)
+	ref := FormatID("wb", id)
+
+	tests := []struct {
+		name      string
+		copyGlobs string // "" removes .tix/copy-paths
+		front     string
+		wantCopy  bool
+		wantTier  int
+	}{
+		{"all paths are copy", "# copy\nsrc/copy/*.ts\nopenapi/**\n",
+			"paths: [src/copy/labels.ts, openapi/spec.yaml]\ncontracts_changed: [openapi description]\n", true, 0},
+		{"one code path", "src/copy/*.ts\n",
+			"paths: [src/copy/labels.ts, src/app.ts]\ncontracts_changed: [openapi description]\n", false, 2},
+		{"no copy-paths file", "",
+			"paths: [src/copy/labels.ts]\ncontracts_changed: [openapi description]\n", false, 2},
+		{"frontmatter cannot claim copy", "",
+			"copy_only: true\npaths: [src/app.ts]\ncontracts_changed: [api]\n", false, 2},
+		{"copy with open decisions", "src/copy/*.ts\n",
+			"paths: [src/copy/labels.ts]\ndecisions: [{q: which}]\n", true, 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.copyGlobs == "" {
+				if err := os.Remove(copyPaths); err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(copyPaths, []byte(tc.copyGlobs), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			plan := "---\nticket: " + ref + "\n" + tc.front + "acceptance: [label reads right]\n---\n"
+			if err := os.WriteFile(filepath.Join(repo, "plans", ref+".md"), []byte(plan), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := IndexPlan(context.Background(), id, "")
+			if err != nil {
+				t.Fatalf("IndexPlan: %v", err)
+			}
+			if got.CopyOnly != tc.wantCopy || got.Review.Tier != tc.wantTier {
+				t.Fatalf("CopyOnly = %v, tier = %d; want %v, %d", got.CopyOnly, got.Review.Tier, tc.wantCopy, tc.wantTier)
+			}
+			in, err := os.ReadFile(hook + ".in")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sent := strings.Contains(string(in), `"copy_only":true`); sent != tc.wantCopy {
+				t.Fatalf("hook input copy_only sent = %v, want %v: %s", sent, tc.wantCopy, in)
+			}
+		})
+	}
+}
+
+func TestDefaultPlanPath(t *testing.T) {
+	setupTestDB(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := t.TempDir()
+	if _, err := CreateProject(Project{Name: "web", Key: "wb", RepoPath: repo}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if _, err := CreateProject(Project{Name: "loose", Key: "lo"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	inRepo := filepath.Join(repo, "plans", "wb-1.md")
+	outside := filepath.Join(home, ".tix", "plans", "web", "wb-1.md")
+	looseOutside := filepath.Join(home, ".tix", "plans", "loose", "lo-1.md")
+	write := func(path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("---\nticket: x\n---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		name    string
+		project string
+		setup   func()
+		want    string
+		wantErr bool
+	}{
+		{"neither exists names the repo path", "web", nil, inRepo, false},
+		{"outside the repo", "web", func() { write(outside) }, outside, false},
+		{"repo plan wins", "web", func() { write(inRepo) }, inRepo, false},
+		{"no repo_path and no plan", "loose", nil, "", true},
+		{"no repo_path, plan outside", "loose", func() { write(looseOutside) }, looseOutside, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.setup != nil {
+				tc.setup()
+			}
+			got, err := DefaultPlanPath(Ticket{ID: 1, Project: tc.project})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("DefaultPlanPath() = %q, want error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DefaultPlanPath: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("DefaultPlanPath() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

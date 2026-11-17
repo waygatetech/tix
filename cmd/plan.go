@@ -16,8 +16,13 @@ var planCmd = &cobra.Command{
 	Short: "Index a ticket's repo plan",
 	Long: `Parse the YAML frontmatter of a ticket's plan and cache it on the ticket.
 
-The plan defaults to plans/<key>-<id>.md under the project's repo_path. The
-file stays canonical; re-running replaces the cached fields.
+The plan defaults to plans/<key>-<id>.md under the project's repo_path, else
+~/.tix/plans/<project>/<key>-<id>.md, which keeps the plan out of the ticket's
+branch. The file stays canonical; re-running replaces the cached fields.
+
+When every plan path matches a glob in the repo's .tix/copy-paths (one glob
+per line), tix sends the hook copy_only: true. The default hook tiers such a
+plan 0 unless it adds concepts or decisions.
 
 If the project has a plan hook (.tix/plan-hook in its repo_path, else
 ~/.tix/plan-hook), it receives the parsed plan as JSON on stdin and prints
@@ -195,7 +200,7 @@ func init() {
 	leasesCmd.Flags().StringVar(&fieldsOutput, "fields", "", "comma-separated JSON fields to include")
 	rootCmd.AddCommand(leasesCmd)
 
-	planCmd.Flags().StringVar(&planFile, "file", "", "plan file (default plans/<key>-<id>.md in the project's repo_path)")
+	planCmd.Flags().StringVar(&planFile, "file", "", "plan file (default plans/<key>-<id>.md in the project's repo_path, else ~/.tix/plans/<project>/)")
 	planCmd.Flags().StringVarP(&project, "project", "p", "", "project the ticket must belong to (errors on mismatch)")
 	planCmd.Flags().BoolVar(&jsonOutput, "json", false, "output the parsed plan as JSON")
 	planCmd.Flags().BoolVar(&compactOutput, "compact", false, "minify JSON output")

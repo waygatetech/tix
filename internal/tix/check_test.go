@@ -237,3 +237,63 @@ func TestCheckWorktree(t *testing.T) {
 		t.Fatalf("Check() = %+v, want %+v", got, want)
 	}
 }
+
+// A plan kept in ~/.tix/plans/<project>/ is found without --file and never has
+// to be tracked in the ticket's branch for the check to pass.
+func TestCheckPlanOutsideRepo(t *testing.T) {
+	setupTestDB(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if _, err := CreateProject(Project{Name: "app", Key: "ap"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	id64, err := Add("copy", "", 1, "app", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	id := int(id64)
+	ref := FormatID("ap", id)
+	repo, run := gitRepo(t, ref)
+	if _, err := db.Exec(`UPDATE projects SET repo_path = ? WHERE name = 'app'`, repo); err != nil {
+		t.Fatal(err)
+	}
+	planPath := filepath.Join(home, ".tix", "plans", "app", ref+".md")
+	if err := os.MkdirAll(filepath.Dir(planPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(planPath, []byte("---\nticket: "+ref+"\npaths: [\"copy/*.txt\"]\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := IndexPlan(context.Background(), id, "")
+	if err != nil {
+		t.Fatalf("IndexPlan: %v", err)
+	}
+	if plan.Path != planPath {
+		t.Fatalf("plan.Path = %q, want %q", plan.Path, planPath)
+	}
+
+	tree := filepath.Join(repo, worktreesDir, ref)
+	if err := os.MkdirAll(filepath.Join(tree, "copy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "copy", "banner.txt"), []byte("new words\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(tree, "add", ".")
+	run(tree, "commit", "-q", "-m", "copy")
+
+	tracked, err := git(context.Background(), tree, "ls-files", "plans")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tracked != "" {
+		t.Fatalf("branch tracks plan files: %q", tracked)
+	}
+	got, err := Check(context.Background(), id, "main")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !got.OK() {
+		t.Fatalf("Check() = %+v, want OK", got)
+	}
+}
