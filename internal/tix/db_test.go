@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -485,5 +486,161 @@ func TestClaimNextConcurrentlyClaimsEachTicketOnce(t *testing.T) {
 	}
 	if len(seen) != total {
 		t.Errorf("claimed %d distinct tickets, want %d", len(seen), total)
+	}
+}
+
+var uuidV4 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+// uuidMigration rewrites every reference to a ticket in one transaction, so a
+// database seeded at the current schema must come out with each link pointing
+// at the same ticket it did before, just by UUID.
+func TestUUIDMigrationRewritesTicketReferences(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	epic, err := Add("epic", "", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add epic: %v", err)
+	}
+	epicID := int(epic)
+	child, err := Add("child", "", 2, "acme", &epicID)
+	if err != nil {
+		t.Fatalf("Add child: %v", err)
+	}
+	blocked, err := Add("blocked", "", 2, "acme", nil, int(child))
+	if err != nil {
+		t.Fatalf("Add blocked: %v", err)
+	}
+	removed, err := Add("removed", "", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add removed: %v", err)
+	}
+	// Closing the epic's only child closes the epic with closed_by = child.
+	if err := Done(int(child)); err != nil {
+		t.Fatalf("Done child: %v", err)
+	}
+	if err := recordJevEvaluation(int(blocked), JevEvaluation{PolicyDecision: "allow", Mode: "off"}); err != nil {
+		t.Fatalf("recordJevEvaluation: %v", err)
+	}
+	if _, err := Claim(int(removed)); err != nil {
+		t.Fatalf("Claim removed: %v", err)
+	}
+	if err := Remove(int(removed), "acme"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if _, err := tx.Exec(uuidMigration); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("uuidMigration: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	ids := map[int64]string{}
+	rows, err := db.Query(`SELECT id, legacy_id FROM tickets`)
+	if err != nil {
+		t.Fatalf("select tickets: %v", err)
+	}
+	for rows.Next() {
+		var id string
+		var legacy int64
+		if err := rows.Scan(&id, &legacy); err != nil {
+			t.Fatalf("scan ticket: %v", err)
+		}
+		if !uuidV4.MatchString(id) {
+			t.Errorf("ticket %d id = %q, want a UUIDv4", legacy, id)
+		}
+		ids[legacy] = id
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read tickets: %v", err)
+	}
+	for _, legacy := range []int64{epic, child, blocked} {
+		if ids[legacy] == "" {
+			t.Fatalf("no ticket with legacy_id %d; got %v", legacy, ids)
+		}
+	}
+	if len(ids) != 3 {
+		t.Errorf("got %d tickets, want 3: %v", len(ids), ids)
+	}
+
+	tests := []struct {
+		name  string
+		query string
+		args  []any
+		want  string
+	}{
+		{"parent", `SELECT parent_id FROM tickets WHERE id = ?`, []any{ids[child]}, ids[epic]},
+		{"dependency", `SELECT depends_on_id FROM ticket_dependencies WHERE ticket_id = ?`, []any{ids[blocked]}, ids[child]},
+		{"jev", `SELECT ticket_id FROM jev_evaluations`, nil, ids[blocked]},
+		{"closed_by", `SELECT json_extract(data, '$.closed_by') FROM ticket_events WHERE ticket_id = ? AND event = 'done'`, []any{ids[epic]}, ids[child]},
+		{"child events", `SELECT ticket_id FROM ticket_events WHERE event = 'done' AND data IS NULL`, nil, ids[child]},
+		{"tickets sequence", `SELECT COUNT(*) FROM sqlite_sequence WHERE name = 'tickets'`, nil, "0"},
+		{"untyped ticket ids", `SELECT COUNT(*) FROM ticket_events WHERE typeof(ticket_id) != 'text'`, nil, "0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+			if err := db.QueryRow(tt.query, tt.args...).Scan(&got); err != nil {
+				t.Fatalf("query: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	// A removed ticket's history keeps one UUID, so it still groups as one ticket.
+	var orphan string
+	var orphanCount int
+	if err := db.QueryRow(`SELECT ticket_id, COUNT(*) FROM ticket_events
+		WHERE ticket_id NOT IN (SELECT id FROM tickets) GROUP BY ticket_id`).Scan(&orphan, &orphanCount); err != nil {
+		t.Fatalf("removed ticket events: %v", err)
+	}
+	if !uuidV4.MatchString(orphan) || orphanCount == 0 {
+		t.Errorf("removed ticket events = %q x%d, want a UUIDv4 with events", orphan, orphanCount)
+	}
+
+	if _, err := db.Exec(`UPDATE ticket_events SET event = 'x'`); err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Errorf("UPDATE ticket_events error = %v, want append-only", err)
+	}
+}
+
+// Integer ids stop meaning creation order once they are random UUIDs, so
+// dependencies list by created_at and use id only to break ties.
+func TestDependenciesOrderByCreatedAt(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+
+	first, err := Add("first", "", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	second, err := Add("second", "", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE tickets SET created_at = '2020-01-02 00:00:00' WHERE id = ?`, first); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE tickets SET created_at = '2020-01-01 00:00:00' WHERE id = ?`, second); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+	blocked, err := Add("blocked", "", 2, "acme", nil, int(first), int(second))
+	if err != nil {
+		t.Fatalf("Add blocked: %v", err)
+	}
+
+	deps, _, err := dependenciesFor(int(blocked))
+	if err != nil {
+		t.Fatalf("dependenciesFor: %v", err)
+	}
+	if len(deps) != 2 || deps[0] != int(second) || deps[1] != int(first) {
+		t.Errorf("dependencies = %v, want [%d %d] (created_at order)", deps, second, first)
 	}
 }

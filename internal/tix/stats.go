@@ -370,7 +370,7 @@ func loadStatsEvents(project string) ([]statsEvent, error) {
 // replanned; record concepts on plan events if that skews the numbers.
 func loadStatsConcepts(project string) (map[int][]string, error) {
 	rows, err := db.Query(`SELECT tickets.id, c.value FROM tickets, `+planConcepts+`
-		WHERE (? = '' OR tickets.project = ?) AND c.type = 'text' ORDER BY tickets.id, p.column1, c.key`, project, project)
+		WHERE (? = '' OR tickets.project = ?) AND c.type = 'text' ORDER BY tickets.created_at, tickets.id, p.column1, c.key`, project, project)
 	if err != nil {
 		return nil, fmt.Errorf("loading plan concepts: %w", err)
 	}

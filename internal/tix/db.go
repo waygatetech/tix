@@ -294,6 +294,133 @@ var migrations = []string{
 	`ALTER TABLE projects ADD COLUMN max_active INTEGER NOT NULL DEFAULT 0;`,
 }
 
+// uuidMigration replaces integer ticket ids with UUIDv4 strings, keeping each
+// old number in tickets.legacy_id. It is not in migrations yet: code that
+// scans ids as int cannot read the result, so it is appended once tickets
+// carry string ids (ti-1034).
+//
+// Every integer id found anywhere maps to one UUID, including ids of removed
+// tickets whose events and jev rows remain, so that history still groups by
+// ticket. The rebuilt tickets table has no AUTOINCREMENT, and dropping the old
+// one takes its sqlite_sequence row with it. Event and jev rows keep their own
+// ids.
+var uuidMigration = `CREATE TEMP TABLE ticket_uuids (
+		legacy_id INTEGER PRIMARY KEY,
+		id TEXT NOT NULL UNIQUE
+	);
+	INSERT INTO ticket_uuids (legacy_id, id)
+	SELECT legacy_id,
+		lower(hex(randomblob(4))) || '-' ||
+		lower(hex(randomblob(2))) || '-4' ||
+		substr(lower(hex(randomblob(2))), 2) || '-' ||
+		substr('89ab', 1 + (abs(random()) % 4), 1) ||
+		substr(lower(hex(randomblob(2))), 2) || '-' ||
+		lower(hex(randomblob(6)))
+	FROM (
+		SELECT id AS legacy_id FROM tickets
+		UNION SELECT parent_id FROM tickets WHERE parent_id IS NOT NULL
+		UNION SELECT ticket_id FROM ticket_dependencies
+		UNION SELECT depends_on_id FROM ticket_dependencies
+		UNION SELECT ticket_id FROM ticket_events
+		UNION SELECT ticket_id FROM jev_evaluations
+	);
+
+	CREATE TABLE tickets_new (
+		id TEXT PRIMARY KEY NOT NULL,
+		legacy_id INTEGER UNIQUE,
+		title TEXT NOT NULL,
+		body TEXT DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'open',
+		priority INTEGER NOT NULL DEFAULT 2,
+		order_rank INTEGER NOT NULL DEFAULT 0,
+		project TEXT NOT NULL DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME,
+		parent_id TEXT REFERENCES tickets(id),
+		plan TEXT
+	);
+	INSERT INTO tickets_new (id, legacy_id, title, body, status, priority, order_rank,
+		project, created_at, updated_at, parent_id, plan)
+	SELECT u.id, t.id, t.title, t.body, t.status, t.priority, t.order_rank,
+		t.project, t.created_at, t.updated_at, p.id, t.plan
+	FROM tickets t
+	JOIN ticket_uuids u ON u.legacy_id = t.id
+	LEFT JOIN ticket_uuids p ON p.legacy_id = t.parent_id;
+
+	CREATE TABLE ticket_dependencies_new (
+		ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+		depends_on_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (ticket_id, depends_on_id)
+	);
+	INSERT INTO ticket_dependencies_new (ticket_id, depends_on_id, created_at)
+	SELECT t.id, d.id, td.created_at
+	FROM ticket_dependencies td
+	JOIN ticket_uuids t ON t.legacy_id = td.ticket_id
+	JOIN ticket_uuids d ON d.legacy_id = td.depends_on_id;
+
+	CREATE TABLE ticket_events_new (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		ticket_id TEXT NOT NULL,
+		event TEXT NOT NULL,
+		at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		data TEXT
+	);
+	INSERT INTO ticket_events_new (id, ticket_id, event, at, data)
+	SELECT e.id, u.id, e.event, e.at,
+		CASE WHEN c.id IS NULL THEN e.data ELSE json_set(e.data, '$.closed_by', c.id) END
+	FROM ticket_events e
+	JOIN ticket_uuids u ON u.legacy_id = e.ticket_id
+	LEFT JOIN ticket_uuids c ON e.event = 'done'
+		AND json_valid(e.data)
+		AND c.legacy_id = json_extract(e.data, '$.closed_by');
+
+	CREATE TABLE jev_evaluations_new (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		ticket_id TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		model TEXT NOT NULL DEFAULT '',
+		product_decision_required REAL,
+		requirements_ambiguous REAL,
+		scope_risk REAL,
+		policy_decision TEXT NOT NULL,
+		latency_ms INTEGER NOT NULL,
+		input_tokens INTEGER NOT NULL DEFAULT 0,
+		output_tokens INTEGER NOT NULL DEFAULT 0,
+		mode TEXT NOT NULL,
+		http_status INTEGER NOT NULL DEFAULT 0,
+		status TEXT NOT NULL,
+		error TEXT NOT NULL DEFAULT ''
+	);
+	INSERT INTO jev_evaluations_new (id, ticket_id, created_at, model,
+		product_decision_required, requirements_ambiguous, scope_risk, policy_decision,
+		latency_ms, input_tokens, output_tokens, mode, http_status, status, error)
+	SELECT j.id, u.id, j.created_at, j.model,
+		j.product_decision_required, j.requirements_ambiguous, j.scope_risk, j.policy_decision,
+		j.latency_ms, j.input_tokens, j.output_tokens, j.mode, j.http_status, j.status, j.error
+	FROM jev_evaluations j
+	JOIN ticket_uuids u ON u.legacy_id = j.ticket_id;
+
+	DROP TABLE ticket_dependencies;
+	DROP TABLE ticket_events;
+	DROP TABLE jev_evaluations;
+	DROP TABLE tickets;
+	ALTER TABLE tickets_new RENAME TO tickets;
+	ALTER TABLE ticket_dependencies_new RENAME TO ticket_dependencies;
+	ALTER TABLE ticket_events_new RENAME TO ticket_events;
+	ALTER TABLE jev_evaluations_new RENAME TO jev_evaluations;
+	DROP TABLE ticket_uuids;
+
+	CREATE INDEX tickets_project_status_order ON tickets(project, status, priority, order_rank);
+	CREATE INDEX tickets_parent_id ON tickets(parent_id);
+	CREATE INDEX ticket_dependencies_depends_on ON ticket_dependencies(depends_on_id, ticket_id);
+	CREATE INDEX jev_evaluations_ticket_id ON jev_evaluations(ticket_id, created_at);
+	CREATE INDEX ticket_events_ticket_id ON ticket_events(ticket_id, id);
+	CREATE TRIGGER ticket_events_no_update BEFORE UPDATE ON ticket_events
+		BEGIN SELECT RAISE(ABORT, 'ticket_events is append-only'); END;
+	CREATE TRIGGER ticket_events_no_delete BEFORE DELETE ON ticket_events
+		BEGIN SELECT RAISE(ABORT, 'ticket_events is append-only'); END;`
+
 // migrate applies every migration the database has not seen yet. The version
 // check is a read, so an up-to-date database never takes a write lock here:
 // running schema statements on every invocation made read-only commands fail

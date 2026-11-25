@@ -616,7 +616,7 @@ const planConcepts = `(VALUES ('$.concepts'), ('$.new_concepts')) p, json_each(t
 // hydrateConcepts fills each ticket's Concepts from its cached plan.
 func hydrateConcepts(project string, tickets []Ticket) error {
 	rows, err := db.Query(`SELECT tickets.id, c.value FROM tickets, `+planConcepts+`
-		WHERE tickets.project = ? AND c.type = 'text' ORDER BY tickets.id, p.column1, c.key`, project)
+		WHERE tickets.project = ? AND c.type = 'text' ORDER BY tickets.created_at, tickets.id, p.column1, c.key`, project)
 	if err != nil {
 		return fmt.Errorf("loading plan concepts: %w", err)
 	}
@@ -682,7 +682,7 @@ func dependenciesFor(id int) ([]int, []int, error) {
 		FROM ticket_dependencies td
 		JOIN tickets dep ON dep.id = td.depends_on_id
 		WHERE td.ticket_id = ?
-		ORDER BY dep.id ASC`, id)
+		ORDER BY dep.created_at ASC, dep.id ASC`, id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -771,7 +771,7 @@ func StaleTickets(options StaleOptions) ([]Ticket, error) {
 	}
 	query := `SELECT ` + ticketColumns + ` FROM tickets
 			 WHERE ` + where + `
-			 ORDER BY datetime(COALESCE(updated_at, created_at)) ASC, id ASC`
+			 ORDER BY datetime(COALESCE(updated_at, created_at)) ASC, created_at ASC, id ASC`
 	if options.Limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, options.Limit)
@@ -988,7 +988,7 @@ func globalMaxActive() (int, error) {
 // reports them as waiting once there are max of them.
 func capacityAt(scope, project string, max int) error {
 	rows, err := db.Query(`SELECT `+ticketColumns+` FROM tickets
-		WHERE status = 'in_progress' AND (? = '' OR project = ?) ORDER BY updated_at, id`, project, project)
+		WHERE status = 'in_progress' AND (? = '' OR project = ?) ORDER BY updated_at, created_at, id`, project, project)
 	if err != nil {
 		return fmt.Errorf("listing in-progress tickets: %w", err)
 	}
