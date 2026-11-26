@@ -188,3 +188,129 @@ func TestFormatID(t *testing.T) {
 		t.Errorf("FormatID(\"\", 47) = %q, want 47", got)
 	}
 }
+
+func TestShortIDs(t *testing.T) {
+	tests := []struct {
+		name string
+		ids  []string
+		want map[string]string
+	}{
+		{
+			name: "single id uses the minimum",
+			ids:  []string{"a3f9b2c1-0000-4000-8000-000000000000"},
+			want: map[string]string{"a3f9b2c1-0000-4000-8000-000000000000": "a3f9"},
+		},
+		{
+			name: "shared prefix lengthens only the rivals",
+			ids: []string{
+				"a3f90000-0000-4000-8000-000000000000",
+				"a3f91111-0000-4000-8000-000000000000",
+				"4747aaaa-0000-4000-8000-000000000000",
+			},
+			want: map[string]string{
+				"a3f90000-0000-4000-8000-000000000000": "a3f90",
+				"a3f91111-0000-4000-8000-000000000000": "a3f91",
+				"4747aaaa-0000-4000-8000-000000000000": "4747",
+			},
+		},
+		{
+			name: "prefix past the first hyphen ignores it",
+			ids: []string{
+				"a3f9b2c1-0000-4000-8000-000000000000",
+				"a3f9b2c1-1000-4000-8000-000000000000",
+			},
+			want: map[string]string{
+				"a3f9b2c1-0000-4000-8000-000000000000": "a3f9b2c10",
+				"a3f9b2c1-1000-4000-8000-000000000000": "a3f9b2c11",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ShortIDs(tt.ids); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ShortIDs = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveUUIDRef(t *testing.T) {
+	setupTestDB(t)
+	newProjects(t, "acme")
+	for _, title := range []string{"alpha", "beta", "legacy", "digits"} {
+		if _, err := Add(title, "", 2, "acme", nil); err != nil {
+			t.Fatalf("Add %s: %v", title, err)
+		}
+	}
+	if _, err := db.Exec(uuidMigration); err != nil {
+		t.Fatalf("uuidMigration: %v", err)
+	}
+
+	const (
+		alpha  = "a3f90000-0000-4000-8000-000000000001"
+		beta   = "a3f91111-0000-4000-8000-000000000002"
+		legacy = "c0de0000-0000-4000-8000-000000000003"
+		digits = "48210000-0000-4000-8000-000000000004"
+	)
+	pins := []struct {
+		title, id string
+		legacyID  int
+	}{
+		{"alpha", alpha, 1},
+		{"beta", beta, 2},
+		{"legacy", legacy, 47},
+		{"digits", digits, 3},
+	}
+	for _, p := range pins {
+		if _, err := db.Exec(`UPDATE tickets SET id = ?, legacy_id = ? WHERE title = ?`, p.id, p.legacyID, p.title); err != nil {
+			t.Fatalf("pin %s: %v", p.title, err)
+		}
+	}
+	// "4821" is now both alpha's legacy number and a prefix of digits' UUID.
+	if _, err := db.Exec(`UPDATE tickets SET legacy_id = 4821 WHERE id = ?`, alpha); err != nil {
+		t.Fatalf("pin legacy 4821: %v", err)
+	}
+
+	tests := []struct {
+		ref     string
+		want    string
+		errHas  []string
+		wantErr bool
+	}{
+		{ref: "a3f90", want: alpha},
+		{ref: "ac-a3f91", want: beta},
+		{ref: "A3F91", want: beta},
+		{ref: "#a3f90", want: alpha},
+		{ref: alpha, want: alpha},
+		{ref: "ac-" + alpha, want: alpha},
+		{ref: "c0de", want: legacy},
+		{ref: "47", want: legacy},
+		{ref: "ac-47", want: legacy},
+		{ref: "a3f9", wantErr: true, errHas: []string{alpha, beta, "alpha", "beta"}},
+		{ref: "4821", wantErr: true, errHas: []string{alpha, digits}},
+		{ref: "ze-a3f90", wantErr: true, errHas: []string{"acme"}},
+		{ref: "ffff", wantErr: true, errHas: []string{"no such ticket"}},
+		{ref: "abc", wantErr: true, errHas: []string{"invalid id"}},
+		{ref: "zzzz", wantErr: true, errHas: []string{"invalid id"}},
+		{ref: "-a3f90", wantErr: true, errHas: []string{"invalid id"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ref, func(t *testing.T) {
+			got, err := resolveUUIDRef(tt.ref)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("resolveUUIDRef(%q) = %q, want error", tt.ref, got)
+				}
+				for _, s := range tt.errHas {
+					if !strings.Contains(err.Error(), s) {
+						t.Errorf("error %q does not contain %q", err, s)
+					}
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Errorf("resolveUUIDRef(%q) = (%q, %v), want %q", tt.ref, got, err, tt.want)
+			}
+		})
+	}
+}

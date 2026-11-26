@@ -2,6 +2,7 @@ package tix
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -257,4 +258,145 @@ func ResolveRef(ref string) (int, error) {
 		)
 	}
 	return id, nil
+}
+
+// minShortID is the fewest hex characters a displayed ticket id uses.
+const minShortID = 4
+
+// uuidPattern matches a full UUID, which a reference may end with.
+var uuidPattern = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// ShortIDs maps each UUID to the shortest hex prefix, hyphens removed and at
+// least minShortID characters, that no other id in ids starts with. Once the
+// ids are sorted, an id's closest rivals are its neighbours, so it needs one
+// character past the longest prefix it shares with either of them.
+func ShortIDs(ids []string) map[string]string {
+	hexes := make([]string, len(ids))
+	full := make(map[string]string, len(ids))
+	for i, id := range ids {
+		hexes[i] = strings.ReplaceAll(id, "-", "")
+		full[hexes[i]] = id
+	}
+	sort.Strings(hexes)
+
+	short := make(map[string]string, len(ids))
+	for i, h := range hexes {
+		n := minShortID
+		if i > 0 {
+			n = max(n, commonPrefixLen(h, hexes[i-1])+1)
+		}
+		if i+1 < len(hexes) {
+			n = max(n, commonPrefixLen(h, hexes[i+1])+1)
+		}
+		short[full[h]] = h[:min(n, len(h))]
+	}
+	return short
+}
+
+func commonPrefixLen(a, b string) int {
+	n := 0
+	for n < len(a) && n < len(b) && a[n] == b[n] {
+		n++
+	}
+	return n
+}
+
+func isHex(s string) bool {
+	for _, r := range s {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func isDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// resolveUUIDRef is ResolveRef for UUID ticket ids. It accepts
+// "[key-]<hex prefix>", "[key-]<full uuid>", or "[key-]<legacy number>".
+// All-digit input is checked as both a legacy number and a hex prefix, and
+// matching two tickets is an error like any other ambiguous prefix. It is
+// unwired until callers carry string ids (ti-1034).
+func resolveUUIDRef(ref string) (string, error) {
+	trimmed := strings.TrimPrefix(strings.TrimSpace(ref), "#")
+	body, key := trimmed, ""
+	if loc := uuidPattern.FindStringIndex(trimmed); loc != nil {
+		body = trimmed[loc[0]:]
+		if loc[0] > 0 {
+			key = strings.TrimSuffix(trimmed[:loc[0]], "-")
+			if key == trimmed[:loc[0]] || key == "" {
+				return "", fmt.Errorf("invalid id: %s", ref)
+			}
+		}
+	} else if i := strings.LastIndex(trimmed, "-"); i >= 0 {
+		key, body = trimmed[:i], trimmed[i+1:]
+		if key == "" {
+			return "", fmt.Errorf("invalid id: %s", ref)
+		}
+	}
+	body = strings.ToLower(strings.ReplaceAll(body, "-", ""))
+
+	byPrefix := isHex(body) && len(body) >= minShortID
+	byLegacy := isDigits(body)
+	if !byPrefix && !byLegacy {
+		return "", fmt.Errorf("invalid id: %s", ref)
+	}
+
+	rows, err := db.Query(`SELECT id, project, title FROM tickets
+		WHERE (? AND replace(id, '-', '') LIKE ? || '%')
+			OR (? AND legacy_id = ?)
+		ORDER BY created_at, id`, byPrefix, body, byLegacy, body)
+	if err != nil {
+		return "", fmt.Errorf("resolving %s: %w", ref, err)
+	}
+	defer rows.Close()
+	type match struct{ id, project, title string }
+	var matches []match
+	for rows.Next() {
+		var m match
+		if err := rows.Scan(&m.id, &m.project, &m.title); err != nil {
+			return "", fmt.Errorf("resolving %s: %w", ref, err)
+		}
+		matches = append(matches, m)
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("resolving %s: %w", ref, err)
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", noSuchTicket(ref)
+	case 1:
+	default:
+		prefixes, err := Prefixes()
+		if err != nil {
+			return "", fmt.Errorf("listing matches for %s: %w", ref, err)
+		}
+		lines := make([]string, len(matches))
+		for i, m := range matches {
+			lines[i] = fmt.Sprintf("  %s-%s %s", prefixes[m.project], m.id, m.title)
+		}
+		return "", fmt.Errorf("%s matches %d tickets:\n%s", ref, len(matches), strings.Join(lines, "\n"))
+	}
+
+	m := matches[0]
+	if key == "" {
+		return m.id, nil
+	}
+	actual, err := PrefixFor(m.project)
+	if err != nil {
+		return "", fmt.Errorf("checking project of %s: %w", ref, err)
+	}
+	if actual != key {
+		return "", fmt.Errorf("ticket %s belongs to project %q (%s-%s), not %q",
+			m.id, m.project, actual, m.id, key)
+	}
+	return m.id, nil
 }
