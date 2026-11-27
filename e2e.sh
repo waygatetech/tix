@@ -68,6 +68,33 @@ check_status() {
   fi
 }
 
+# ids are random UUIDs, so a ticket is tracked by the UUID captured when it is
+# added, and expected output is built from its current short ref: a short ref
+# grows when a newer ticket starts with the same hex, so one captured early
+# can stop matching later output
+uuid_of() { "$tmp/tix" show "$1" --json --compact --fields id | sed -E 's/^\{"id":"([^"]+)"\}$/\1/'; }
+ref() { "$tmp/tix" show "$1" | awk 'NR==1 {print $1}'; }
+hex() { local r; r=$(ref "$1"); echo "${r#*-}"; }
+
+# add_ticket VAR DESC EXPECTED ARGS...: checks `tix add ARGS` like check does,
+# then stores the new ticket's UUID in VAR
+add_ticket() {
+  local var="$1" desc="$2" expected="$3"
+  shift 3
+  local out
+  out=$("$tmp/tix" add "$@" 2>&1) || true
+  if ! grep -qF -- "$expected" <<<"$out"; then
+    echo "FAIL: $desc" >&2
+    echo "  expected: $expected" >&2
+    echo "  got:" >&2
+    echo "$out" >&2
+    exit 1
+  fi
+  echo "ok: $desc"
+  pass=$((pass + 1))
+  printf -v "$var" '%s' "$(uuid_of "$(grep -oE '^[a-z0-9]+-[0-9a-f]{4,}' <<<"$out" | tail -1)")"
+}
+
 # releases stamp main.version through ldflags; other builds report their module or VCS version
 check "--version reports the build" "tix version " "$tmp/tix" --version
 
@@ -84,13 +111,16 @@ check_status "a ticket command fails on the unusable database" 1 env TIX_DB="$un
 
 # projects are rows: a name has to be created before tickets can land in it,
 # either up front or with --create on the first ticket
-check "add --create defines project acme" "created project acme" "$tmp/tix" add --project acme "fix login bug" -b "users can't log in" --create
-check "add high-priority ticket" "ac-2 [P0] write docs" "$tmp/tix" add --project acme "write docs" -b "README" -p 0
-check "add ticket in a second project" "ze-3 [P2] refactor parser" "$tmp/tix" add --project zen "refactor parser" -b "split tokens" --create
+add_ticket login "add --create defines project acme" "created project acme" --project acme "fix login bug" -b "users can't log in" --create
+add_ticket docs "add high-priority ticket" "[P0] write docs" --project acme "write docs" -b "README" -p 0
+check "add prints the project prefix" "ac-" ref "$docs"
+check "add stores a UUIDv4 id" "ok" bash -c "grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' <<<'$docs' && echo ok"
+add_ticket parser "add ticket in a second project" "[P2] refactor parser" --project zen "refactor parser" -b "split tokens" --create
+check "the second project's ticket has its prefix" "ze-" ref "$parser"
 printf "generated body from a file" >"$tmp/body.txt"
-check "add reads body from file" "fi-4 [P1] file-backed ticket" "$tmp/tix" add --project files "file-backed ticket" --body-file "$tmp/body.txt" -p 1 --create
+add_ticket filed "add reads body from file" "[P1] file-backed ticket" --project files "file-backed ticket" --body-file "$tmp/body.txt" -p 1 --create
 printf '## Problem\n\nrestore probe via file\n\n## Scope\n\nuse `templates/layout.html`\n' >"$tmp/edit-body.md"
-check "edit reads body from file" "restore probe via file" "$tmp/tix" edit 4 --body-file "$tmp/edit-body.md" --json
+check "edit reads body from file" "restore probe via file" "$tmp/tix" edit "$filed" --body-file "$tmp/edit-body.md" --json
 
 # an unknown project is the error that stops a typo from forking the backlog
 check "add rejects an unknown project" 'unknown project "acmee"' "$tmp/tix" add --project acmee "typo ticket" -b body
@@ -104,22 +134,24 @@ check_status "list with an unknown project exits non-zero" 1 "$tmp/tix" list --p
 check "a variant spelling lists the real project" "fix login bug" "$tmp/tix" list --project ACME
 check "a punctuated variant resolves too" "fix login bug" "$tmp/tix" list --project a-c-m-e
 # 'acme!' sorts after 'acme', so a prefix derived from the typed name instead of
-# the resolved one would print acm-5 for a ticket that is really ac-5
-check "--create on an existing variant reuses it" "ac-5 [P2] variant ticket" "$tmp/tix" add --project 'acme!' "variant ticket" -b body --create
+# the resolved one would print acm- for a ticket that is really ac-
+add_ticket variant "--create on an existing variant reuses it" "[P2] variant ticket" --project 'acme!' "variant ticket" -b body --create
+check "the variant ticket prints the resolved prefix" "ac-" ref "$variant"
 check_absent "the variant did not create a second project" "Acme (" "$tmp/tix" projects
-check "rm removes the variant ticket" "ac-5 removed" "$tmp/tix" rm 5 --project acme
+variant_ref=$(ref "$variant")
+check "rm removes the variant ticket" "$variant_ref removed" "$tmp/tix" rm "$variant" --project acme
 
 check "list shows all acme tickets" "write docs" "$tmp/tix" list --project acme
 check "list acme also shows #1" "fix login bug" "$tmp/tix" list --project acme
 check_absent "list acme excludes zen ticket" "refactor parser" "$tmp/tix" list --project acme
 check "list supports JSON output" '"title": "write docs"' "$tmp/tix" list --project acme --json
-check "list supports compact JSON output" '[{"id":2,' "$tmp/tix" list --project acme --json --compact
+check "list supports compact JSON output" "[{\"id\":\"$docs\"," "$tmp/tix" list --project acme --json --compact
 check "list filters by status" '"status":"open"' "$tmp/tix" list --project acme --status open --json --compact
 check "list filters by priority" '"priority":0' "$tmp/tix" list --project acme --priority 0 --json --compact
-check "list limits results" '[{"id":2,' "$tmp/tix" list --project acme --limit 1 --json --compact
-check "list supports JSON field selection" '[{"id":2,"title":"write docs"}' "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,title
-check "list exposes order when requested" '[{"id":2,"order":2}' "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,order
-check "list exposes concepts when requested" '[{"concepts":[],"id":2}' "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,concepts
+check "list limits results" "[{\"id\":\"$docs\"," "$tmp/tix" list --project acme --limit 1 --json --compact
+check "list supports JSON field selection" "[{\"id\":\"$docs\",\"title\":\"write docs\"}" "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,title
+check "list exposes order when requested" "[{\"id\":\"$docs\",\"order\":2}" "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,order
+check "list exposes concepts when requested" "[{\"concepts\":[],\"id\":\"$docs\"}" "$tmp/tix" list --project acme --limit 1 --json --compact --fields id,concepts
 check "list filters by concept" '[]' "$tmp/tix" list --project acme --concept auth.session --json --compact
 
 # search is the duplicate check: it looks in the body as well as the title, so
@@ -130,7 +162,7 @@ check "search ignores case" "fix login bug" "$tmp/tix" search --project acme LOG
 check "search joins unquoted words into one term" "fix login bug" "$tmp/tix" search --project acme fix login
 check_absent "search stays inside the project" "refactor parser" "$tmp/tix" search --project acme parser
 check_absent "search treats wildcards literally" "write docs" "$tmp/tix" search --project acme '%'
-check "search supports JSON field selection" '[{"id":2,"title":"write docs"}' "$tmp/tix" search --project acme docs --json --compact --fields id,title
+check "search supports JSON field selection" "[{\"id\":\"$docs\",\"title\":\"write docs\"}" "$tmp/tix" search --project acme docs --json --compact --fields id,title
 check "search requires a term" "search term is required" "$tmp/tix" search --project acme
 check_status "search without a term exits non-zero" 1 "$tmp/tix" search --project acme
 check "search rejects an unknown project" 'unknown project "acmee"' "$tmp/tix" search --project acmee login
@@ -151,7 +183,8 @@ check "projects add rejects a duplicate" 'project "sandbox" already exists' "$tm
 check "projects add rejects a variant of an existing project" 'already exists as "sandbox"' "$tmp/tix" projects add Sand-Box
 check_status "projects add with a duplicate exits non-zero" 1 "$tmp/tix" projects add SANDBOX
 check_status "listing an empty project succeeds" 0 "$tmp/tix" list --project sandbox
-check "a pinned key prefixes the project's ticket ids" "sbx-6 [P2] sandbox ticket" "$tmp/tix" add --project sandbox "sandbox ticket" -b body
+add_ticket sandboxed "add to a project with a pinned key" "[P2] sandbox ticket" --project sandbox "sandbox ticket" -b body
+check "a pinned key prefixes the project's ticket ids" "sbx-" ref "$sandboxed"
 check "best-practices shows agent loop" "claim-next --project NAME ->" "$tmp/tix" best-practices
 check "best-practices steers agents to plain text" "Output: plain text is the default" "$tmp/tix" best-practices
 check "agent-guide alias works" "Use: TIX_DB=.tix/tix.db tix" "$tmp/tix" agent-guide
@@ -227,14 +260,14 @@ check_status "a repo config naming no database exits non-zero" 1 solo projects
 popd >/dev/null
 
 check "next returns highest priority first" "write docs" "$tmp/tix" next --project acme
-check "next supports JSON output" '"id": 2' "$tmp/tix" next --project acme --json
-check "next supports compact JSON output" '{"id":2,' "$tmp/tix" next --project acme --json --compact
-check "next supports JSON field selection" '{"id":2,"title":"write docs"}' "$tmp/tix" next --project acme --json --compact --fields id,title
-check "show displays full ticket details" "README" "$tmp/tix" show 2
-check "show supports compact JSON output" '{"id":2,' "$tmp/tix" show 2 --json --compact
-check "show supports JSON field selection" '{"id":2,"status":"open"}' "$tmp/tix" show 2 --json --compact --fields id,status
-check_absent "show hides order by default" '"order"' "$tmp/tix" show 2 --json --compact
-check "show exposes order when requested" '{"id":2,"order":2}' "$tmp/tix" show 2 --json --compact --fields id,order
+check "next supports JSON output" "\"id\": \"$docs\"" "$tmp/tix" next --project acme --json
+check "next supports compact JSON output" "{\"id\":\"$docs\"," "$tmp/tix" next --project acme --json --compact
+check "next supports JSON field selection" "{\"id\":\"$docs\",\"title\":\"write docs\"}" "$tmp/tix" next --project acme --json --compact --fields id,title
+check "show displays full ticket details" "README" "$tmp/tix" show "$docs"
+check "show supports compact JSON output" "{\"id\":\"$docs\"," "$tmp/tix" show "$docs" --json --compact
+check "show supports JSON field selection" "{\"id\":\"$docs\",\"status\":\"open\"}" "$tmp/tix" show "$docs" --json --compact --fields id,status
+check_absent "show hides order by default" '"order"' "$tmp/tix" show "$docs" --json --compact
+check "show exposes order when requested" "{\"id\":\"$docs\",\"order\":2}" "$tmp/tix" show "$docs" --json --compact --fields id,order
 check "claim-next marks ticket in progress" '"status":"in_progress"' "$tmp/tix" claim-next --project zen --json --compact
 check "claim-next removes claimed ticket from next" "no open tickets" "$tmp/tix" next --project zen
 
@@ -250,87 +283,89 @@ check_status "claim-next exits 4 at the global cap" 4 env TIX_MAX_ACTIVE=1 "$tmp
 
 # a ticket claimed by an agent that died stays in_progress forever, so stale is
 # the only thing that names it again. --for 0 stands in for waiting a day.
-check "stale finds a claimed ticket once the window is zero" "ze-3" "$tmp/tix" stale --project zen --for 0
+check "stale finds a claimed ticket once the window is zero" "$(ref "$parser")" "$tmp/tix" stale --project zen --for 0
 check "stale reports how long a ticket has been idle" "idle" "$tmp/tix" stale --project zen --for 0
-check_absent "stale ignores a ticket claimed just now" "ze-3" "$tmp/tix" stale --project zen
+check_absent "stale ignores a ticket claimed just now" "$(ref "$parser")" "$tmp/tix" stale --project zen
 check_absent "stale ignores tickets nobody claimed" "ac-" "$tmp/tix" stale --project acme --for 0
 check "stale can look at another status" "ac-" "$tmp/tix" stale --project acme --for 0 --status open
-check "stale supports JSON field selection" '[{"id":3,"status":"in_progress"}]' "$tmp/tix" stale --project zen --for 0 --json --compact --fields id,status
+check "stale supports JSON field selection" "[{\"id\":\"$parser\",\"status\":\"in_progress\"}]" "$tmp/tix" stale --project zen --for 0 --json --compact --fields id,status
 check "stale rejects a negative window" "--for must be >= 0" "$tmp/tix" stale --project zen --for -1h
 check_status "stale with a negative window exits non-zero" 1 "$tmp/tix" stale --project zen --for -1h
 
 # timestamps are stored, so show surfaces them rather than leaving the database
 # the only place they exist
-check "show reports when a ticket was created" "created 20" "$tmp/tix" show 2
-check "show reports the last write" "updated 20" "$tmp/tix" show 2
-check "show keeps timestamps in JSON" '"updated_at":' "$tmp/tix" show 2 --json --compact
-check "bump #1 to priority 0" "ac-1 -> P0" "$tmp/tix" bump 1 0
+check "show reports when a ticket was created" "created 20" "$tmp/tix" show "$docs"
+check "show reports the last write" "updated 20" "$tmp/tix" show "$docs"
+check "show keeps timestamps in JSON" '"updated_at":' "$tmp/tix" show "$docs" --json --compact
+check "bump login to priority 0" "$(ref "$login") -> P0" "$tmp/tix" bump "$login" 0
 check "next now returns bumped ticket" "fix login bug" "$tmp/tix" next --project acme
 
-# prefixed ids: the bare integer stays valid so existing shell history and
-# scripts keep working, while the prefixed form additionally checks the project
-check "show accepts a prefixed id" "ac-1 [P0] fix login bug" "$tmp/tix" show ac-1
-check "show accepts a bare id" "ac-1 [P0] fix login bug" "$tmp/tix" show 1
-check "show keeps integer ids in JSON" '{"id":1,' "$tmp/tix" show ac-1 --json --compact
-check "prefixed id from the wrong project is rejected" 'belongs to project "acme"' "$tmp/tix" show ze-1
-check_status "wrong-project id exits non-zero" 1 "$tmp/tix" show ze-1
+# a ticket resolves by its prefixed short ref, its bare hex, or its full UUID;
+# the prefixed form additionally checks the project
+check "show accepts a prefixed id" "$(ref "$login") [P0] fix login bug" "$tmp/tix" show "$(ref "$login")"
+check "show accepts a bare hex id" "$(ref "$login") [P0] fix login bug" "$tmp/tix" show "$(hex "$login")"
+check "show accepts a full UUID" "$(ref "$login") [P0] fix login bug" "$tmp/tix" show "$login"
+check "show emits a string id in JSON" "{\"id\":\"$login\"," "$tmp/tix" show "$(ref "$login")" --json --compact
+check "prefixed id from the wrong project is rejected" 'belongs to project "acme"' "$tmp/tix" show "ze-$(hex "$login")"
+check_status "wrong-project id exits non-zero" 1 "$tmp/tix" show "ze-$(hex "$login")"
 check "prefix lists derived prefixes" "acme ac" "$tmp/tix" prefix
 check "prefix reports one project" "zen ze" "$tmp/tix" prefix zen
 
 # a bare id names no project, so mutations say which backlog they touched and
 # an explicit --project must agree with the ticket instead of being ignored
-check "show accepts a matching --project" "fix login bug" "$tmp/tix" show 1 --project acme
-check "show rejects a mismatched --project" 'belongs to project "acme"' "$tmp/tix" show 1 --project zen
-check_status "mismatched --project exits non-zero" 1 "$tmp/tix" show 1 --project zen
-check "a variant spelling still matches" "fix login bug" "$tmp/tix" show 1 --project ACME
-check "mismatched --project rejects an unknown project" 'unknown project "acmee"' "$tmp/tix" show 1 --project acmee
-check "bump names the project it touched" "ac-1 -> P0 (acme: fix login bug)" "$tmp/tix" bump 1 0 --project acme
-check_status "bump rejects a mismatched --project" 1 "$tmp/tix" bump 1 3 --project zen
-check "bump left the priority alone after rejecting" "ac-1 [P0]" "$tmp/tix" show 1
-check_status "done rejects a mismatched --project" 1 "$tmp/tix" done 1 --project zen
-check_absent "done left the ticket open after rejecting" "x ac-1" "$tmp/tix" list --project acme -a
+check "show accepts a matching --project" "fix login bug" "$tmp/tix" show "$login" --project acme
+check "show rejects a mismatched --project" 'belongs to project "acme"' "$tmp/tix" show "$login" --project zen
+check_status "mismatched --project exits non-zero" 1 "$tmp/tix" show "$login" --project zen
+check "a variant spelling still matches" "fix login bug" "$tmp/tix" show "$login" --project ACME
+check "mismatched --project rejects an unknown project" 'unknown project "acmee"' "$tmp/tix" show "$login" --project acmee
+check "bump names the project it touched" "$(ref "$login") -> P0 (acme: fix login bug)" "$tmp/tix" bump "$login" 0 --project acme
+check_status "bump rejects a mismatched --project" 1 "$tmp/tix" bump "$login" 3 --project zen
+check "bump left the priority alone after rejecting" "$(ref "$login") [P0]" "$tmp/tix" show "$login"
+check_status "done rejects a mismatched --project" 1 "$tmp/tix" done "$login" --project zen
+check_absent "done left the ticket open after rejecting" "x $(ref "$login")" "$tmp/tix" list --project acme -a
 
 # edit's --project moves a ticket rather than scoping the lookup, so the move
 # itself has to show up in the confirmation
-movable=$("$tmp/tix" add --project acme "movable ticket" -b body | sed 's/^[a-z0-9]*-\([0-9]*\) .*/\1/')
+movable=$(uuid_of "$("$tmp/tix" add --project acme "movable ticket" -b body | awk '{print $1}')")
 check "edit reports a cross-project move" "moved from acme to zen" "$tmp/tix" edit "$movable" --project zen
 check "the moved ticket lists under zen" "movable ticket" "$tmp/tix" list --project zen
 check_absent "edit stays quiet when the project is unchanged" "moved from" "$tmp/tix" edit "$movable" --title "renamed ticket"
 "$tmp/tix" rm "$movable" --project zen >/dev/null
 
-check "rm removes a ticket" "ac-2 removed (acme: write docs)" "$tmp/tix" rm 2 --project acme
+docs_ref=$(ref "$docs")
+check "rm removes a ticket" "$docs_ref removed (acme: write docs)" "$tmp/tix" rm "$docs" --project acme
 # done runs ~/.tix/done-hook, so isolate HOME from the user's real one
 mkdir -p "$tmp/home/.tix"
 printf '#!/bin/sh\necho "{\\"stage\\":\\"test\\"}"\nexit 1\n' >"$tmp/home/.tix/done-hook"
 chmod +x "$tmp/home/.tix/done-hook"
-check_status "done refuses when the done hook fails" 1 env HOME="$tmp/home" "$tmp/tix" done 1
-check "the failed attempt records its stage" '"result":"fail","stage":"test"' "$tmp/tix" show 1 --events --json --compact
+check_status "done refuses when the done hook fails" 1 env HOME="$tmp/home" "$tmp/tix" done "$login"
+check "the failed attempt records its stage" '"result":"fail","stage":"test"' "$tmp/tix" show "$login" --events --json --compact
 rm "$tmp/home/.tix/done-hook"
-check "done marks a ticket" "ac-1 done (acme: fix login bug)" env HOME="$tmp/home" "$tmp/tix" done 1
-check_absent "list excludes done ticket" "ac-1" "$tmp/tix" list --project acme
-check "list --all shows done ticket" "x ac-1" "$tmp/tix" list --project acme -a
-check "show --events prints the done transition" " done" "$tmp/tix" show 1 --events
-check "show --events supports JSON" '"event":"done"' "$tmp/tix" show 1 --events --json --compact
-check_status "reject requires a reason" 1 "$tmp/tix" reject 1
-check "reject sends done work back" "rejected 1" "$tmp/tix" reject 1 --reason "missed a case"
-check "reject records its reason" '"from":"done","reason":"missed a case"' "$tmp/tix" show 1 --events --json --compact
-check "done closes the rejected ticket again" "ac-1 done" env HOME="$tmp/home" "$tmp/tix" done 1
-check "reopen returns a done ticket to open" "reopened 1" "$tmp/tix" reopen 1 --reason "broke later"
-check "reopen records its reason" '"event":"reopen","at":' "$tmp/tix" show 1 --events --json --compact
-check "done closes the reopened ticket" "ac-1 done" env HOME="$tmp/home" "$tmp/tix" done 1
-check "note appends a handoff note" "noted 1" "$tmp/tix" note 1 "stopped at docs; next: e2e"
+check "done marks a ticket" "$(ref "$login") done (acme: fix login bug)" env HOME="$tmp/home" "$tmp/tix" done "$login"
+check_absent "list excludes done ticket" "$(ref "$login")" "$tmp/tix" list --project acme
+check "list --all shows done ticket" "x $(ref "$login")" "$tmp/tix" list --project acme -a
+check "show --events prints the done transition" " done" "$tmp/tix" show "$login" --events
+check "show --events supports JSON" '"event":"done"' "$tmp/tix" show "$login" --events --json --compact
+check_status "reject requires a reason" 1 "$tmp/tix" reject "$login"
+check "reject sends done work back" "rejected $login" "$tmp/tix" reject "$login" --reason "missed a case"
+check "reject records its reason" '"from":"done","reason":"missed a case"' "$tmp/tix" show "$login" --events --json --compact
+check "done closes the rejected ticket again" "$(ref "$login") done" env HOME="$tmp/home" "$tmp/tix" done "$login"
+check "reopen returns a done ticket to open" "reopened $login" "$tmp/tix" reopen "$login" --reason "broke later"
+check "reopen records its reason" '"event":"reopen","at":' "$tmp/tix" show "$login" --events --json --compact
+check "done closes the reopened ticket" "$(ref "$login") done" env HOME="$tmp/home" "$tmp/tix" done "$login"
+check "note appends a handoff note" "noted $login" "$tmp/tix" note "$login" "stopped at docs; next: e2e"
 printf 'decided by brian: keep it\n' > "$tmp/note.md"
-check "note reads --body-file" "noted 1" "$tmp/tix" note 1 --body-file "$tmp/note.md"
-check "show prints notes" "stopped at docs; next: e2e" "$tmp/tix" show 1
-check "show prints file notes" "decided by brian: keep it" "$tmp/tix" show 1
-check_status "note rejects an empty note" 1 "$tmp/tix" note 1
-check_status "note rejects text and --body-file together" 1 "$tmp/tix" note 1 x --body-file "$tmp/note.md"
-check_status "note rejects a mismatched --project" 1 "$tmp/tix" note 1 "nope" --project zen
-check_absent "mismatched note records nothing" "nope" "$tmp/tix" show 1
+check "note reads --body-file" "noted $login" "$tmp/tix" note "$login" --body-file "$tmp/note.md"
+check "show prints notes" "stopped at docs; next: e2e" "$tmp/tix" show "$login"
+check "show prints file notes" "decided by brian: keep it" "$tmp/tix" show "$login"
+check_status "note rejects an empty note" 1 "$tmp/tix" note "$login"
+check_status "note rejects text and --body-file together" 1 "$tmp/tix" note "$login" x --body-file "$tmp/note.md"
+check_status "note rejects a mismatched --project" 1 "$tmp/tix" note "$login" "nope" --project zen
+check_absent "mismatched note records nothing" "nope" "$tmp/tix" show "$login"
 # work that already shipped is still a duplicate, so search sees closed tickets
 # without being asked
-check "search finds a done ticket" "x ac-1" "$tmp/tix" search --project acme login
-check_absent "search narrows to a status on request" "ac-1" "$tmp/tix" search --project acme login --status open
+check "search finds a done ticket" "x $(ref "$login")" "$tmp/tix" search --project acme login
+check_absent "search narrows to a status on request" "$(ref "$login")" "$tmp/tix" search --project acme login --status open
 check "projects counts done tickets" "acme (ac) done=1 total=1" "$tmp/tix" projects
 check "next has no open tickets left" "no open tickets" "$tmp/tix" next --project acme
 
@@ -351,7 +386,7 @@ done
 wait
 
 claimed=$(cat "$tmp"/claim.*.out)
-distinct=$(sort -u <<<"$claimed" | grep -c '^{"id":[0-9]*}$' || true)
+distinct=$(sort -u <<<"$claimed" | grep -c '^{"id":"[0-9a-f-]*"}$' || true)
 if [[ "$distinct" -eq "$parallel" ]]; then
   echo "ok: $parallel parallel claims each returned a distinct ticket"
   pass=$((pass + 1))
@@ -376,7 +411,7 @@ done
 wait
 
 raced=$(cat "$tmp"/race.*.out)
-raced_ok=$(grep -c '^ra-[0-9]* ' <<<"$raced" || true)
+raced_ok=$(grep -c '^ra-[0-9a-f]* ' <<<"$raced" || true)
 raced_created=$(grep -c '^created project racer$' <<<"$raced" || true)
 if [[ "$raced_ok" -eq "$parallel" && "$raced_created" -eq 1 ]]; then
   echo "ok: $parallel parallel --create adds made one project and $parallel tickets"
@@ -390,7 +425,7 @@ fi
 check "the race created exactly one project" "racer (ra) open=8 total=8" "$tmp/tix" projects
 
 added=$(cat "$tmp"/add.*.out)
-added_ok=$(grep -c '^pa-[0-9]* ' <<<"$added" || true)
+added_ok=$(grep -c '^pa-[0-9a-f]* ' <<<"$added" || true)
 if [[ "$added_ok" -eq "$parallel" ]]; then
   echo "ok: $parallel parallel adds all succeeded"
   pass=$((pass + 1))
@@ -459,14 +494,13 @@ mkdir -p "$rv"
 rvgit init -q -b main
 rvgit commit -q --allow-empty -m base
 "$tmp/tix" projects add reverty --key rv --repo-path "$rv" >/dev/null
-"$tmp/tix" add --project reverty "revert me" -b body >/dev/null
-rv_id=$("$tmp/tix" list --project reverty --json --compact --fields id | grep -o '[0-9]\+' | head -1)
+add_ticket rv_id "add a ticket to revert" "[P2] revert me" --project reverty "revert me" -b body
 echo x > "$rv/f"
-check "done records the repo's HEAD" "rv-$rv_id done" env HOME="$tmp/home" "$tmp/tix" done "$rv_id"
+check "done records the repo's HEAD" "$(ref "$rv_id") done" env HOME="$tmp/home" "$tmp/tix" done "$rv_id"
 check "done event carries the sha" '"branch":"main","dirty":true' "$tmp/tix" show "$rv_id" --events --json --compact
 rvgit add f && rvgit commit -q -m "ticket work"
 rvgit revert --no-edit HEAD >/dev/null
-check "audit records the revert" "rv-$rv_id reverted" "$tmp/tix" audit --project reverty
+check "audit records the revert" "$(ref "$rv_id") reverted" "$tmp/tix" audit --project reverty
 check_absent "audit is idempotent" "reverted" "$tmp/tix" audit --project reverty
 check "audit rejects a non-positive window" "days must be > 0" "$tmp/tix" audit --project reverty --days 0
 
@@ -479,11 +513,11 @@ check "stats rejects a bad window" "invalid --since" "$tmp/tix" stats --since so
 
 # claim takes a named ticket through the same guard, event, and caps as claim-next
 "$tmp/tix" projects add claimy --key cly >/dev/null
-claim_id() { "$tmp/tix" add --project claimy "$1" -b body --json --compact --fields id | tr -dc '0-9'; }
+claim_id() { "$tmp/tix" add --project claimy "$1" -b body --json --compact --fields id | sed -E 's/^\{"id":"([^"]+)"\}$/\1/'; }
 claim_first=$(claim_id "first claim")
 claim_second=$(claim_id "second claim")
 claim_third=$(claim_id "third claim")
-check "claim takes a prefixed id" '"status":"in_progress"' "$tmp/tix" claim "cly-$claim_first" --json --compact
+check "claim takes a prefixed id" '"status":"in_progress"' "$tmp/tix" claim "$(ref "$claim_first")" --json --compact
 check "claim names the status it refuses" "is in_progress" "$tmp/tix" claim "$claim_first"
 check_status "claim refuses a claimed ticket" 1 "$tmp/tix" claim "$claim_first"
 check_status "claim rejects a mismatched --project" 1 "$tmp/tix" claim "$claim_second" --project zen
@@ -491,8 +525,8 @@ check_status "claim rejects an unknown ticket" 1 "$tmp/tix" claim 99999
 check_status "claim exits 4 at capacity" 4 env TIX_MAX_ACTIVE=1 "$tmp/tix" claim "$claim_second"
 check "claim lists what is waiting on review" "first claim" env TIX_MAX_ACTIVE=1 "$tmp/tix" claim "$claim_second"
 check "claim at capacity leaves the ticket open" '"status":"open"' "$tmp/tix" show "$claim_second" --json --compact --fields status
-check "claim takes a bare id and prints the ticket" "cly-$claim_second [P2] second claim" "$tmp/tix" claim "$claim_second"
-check "claim supports JSON field selection" "{\"id\":$claim_third}" "$tmp/tix" claim "$claim_third" --json --compact --fields id
+check "claim takes a bare hex id and prints the ticket" "$(ref "$claim_second") [P2] second claim" "$tmp/tix" claim "$(hex "$claim_second")"
+check "claim supports JSON field selection" "{\"id\":\"$claim_third\"}" "$tmp/tix" claim "$claim_third" --json --compact --fields id
 mkdir -p "$tmp/claim-home"
 HOME="$tmp/claim-home" "$tmp/tix" done "$claim_first" >/dev/null
 check "stats counts cycle time for a claimed ticket" '"cycle_p50_hours"' "$tmp/tix" stats --project claimy --json --compact
@@ -549,8 +583,8 @@ fi
 check_status "init-agent without project exits non-zero" 1 "$tmp/tix" init-agent
 check "list outside a registered repo still needs --project" "no project's repo path contains" "$tmp/tix" list
 check_status "list without --project exits non-zero" 1 "$tmp/tix" list
-check "rm outside a registered repo still needs --project" "no project's repo path contains" "$tmp/tix" rm 3
-check_status "rm without --project exits non-zero" 1 "$tmp/tix" rm 3
+check "rm outside a registered repo still needs --project" "no project's repo path contains" "$tmp/tix" rm "$parser"
+check_status "rm without --project exits non-zero" 1 "$tmp/tix" rm "$parser"
 check "rm requires an id" "ticket id is required" "$tmp/tix" rm --project zen
 check_status "rm without id exits non-zero" 1 "$tmp/tix" rm --project zen
 check "show rejects missing ticket" "no such ticket: 99" "$tmp/tix" show 99
@@ -563,8 +597,8 @@ check "list rejects invalid priority" "invalid priority" "$tmp/tix" list --proje
 check_status "list with invalid priority exits non-zero" 1 "$tmp/tix" list --project acme --priority nope
 check "list rejects negative limit" "limit must be >= 0" "$tmp/tix" list --project acme --limit -1
 check_status "list with negative limit exits non-zero" 1 "$tmp/tix" list --project acme --limit -1
-check "json fields reject unknown fields" "unknown field: missing" "$tmp/tix" show 1 --json --fields missing
-check_status "json fields with unknown field exits non-zero" 1 "$tmp/tix" show 1 --json --fields missing
+check "json fields reject unknown fields" "unknown field: missing" "$tmp/tix" show "$login" --json --fields missing
+check_status "json fields with unknown field exits non-zero" 1 "$tmp/tix" show "$login" --json --fields missing
 check "next with no open tickets reports error" "no open tickets" "$tmp/tix" next --project acme
 check_status "next with no open tickets exits non-zero" 1 "$tmp/tix" next --project acme
 
@@ -572,16 +606,16 @@ check_status "next with no open tickets exits non-zero" 1 "$tmp/tix" next --proj
 sbx_repo="$tmp/sandbox-repo"
 mkdir -p "$sbx_repo/plans" "$tmp/plan-home"
 "$tmp/tix" projects add sbxplan --key sp --repo-path "$sbx_repo" >/dev/null
-"$tmp/tix" add --project sbxplan "planned" --body "b" >/dev/null
-sp_id=$("$tmp/tix" list --project sbxplan --json --compact --fields id | grep -o '[0-9][0-9]*' | head -1)
-printf -- '---\nticket: sp-%s\nacceptance: [show lists acceptance]\n---\n' "$sp_id" >"$sbx_repo/plans/sp-$sp_id.md"
+add_ticket sp_id "add a ticket to plan" "[P2] planned" --project sbxplan "planned" --body "b"
+sp_ref=$(ref "$sp_id")
+printf -- '---\nticket: %s\nacceptance: [show lists acceptance]\n---\n' "$sp_ref" >"$sbx_repo/plans/$sp_ref.md"
 check "plan indexes acceptance" "indexed" env HOME="$tmp/plan-home" "$tmp/tix" plan "$sp_id"
 check "show lists acceptance" "show lists acceptance" "$tmp/tix" show "$sp_id"
 check "show --json includes acceptance" '"acceptance":["show lists acceptance"]' "$tmp/tix" show "$sp_id" --json --compact
 
 # extension frontmatter reaches hooks; a failing approve hook blocks approval
 mkdir -p "$sbx_repo/.tix"
-printf -- '---\nticket: sp-%s\nacceptance: [hooks run]\ntests: [go test]\n---\n' "$sp_id" >"$sbx_repo/plans/sp-$sp_id.md"
+printf -- '---\nticket: %s\nacceptance: [hooks run]\ntests: [go test]\n---\n' "$sp_ref" >"$sbx_repo/plans/$sp_ref.md"
 printf '#!/bin/sh\ncat >"$0.in"\necho "{\\"tier\\":1}"\n' >"$sbx_repo/.tix/plan-hook"
 printf '#!/bin/sh\ncat >/dev/null\n[ "$TIX_HOOK" = approve ] || exit 2\nexit 1\n' >"$sbx_repo/.tix/approve-hook"
 chmod +x "$sbx_repo/.tix/plan-hook" "$sbx_repo/.tix/approve-hook"
@@ -590,11 +624,11 @@ check "plan hook receives extension frontmatter" '"tests":["go test"]' cat "$sbx
 check_absent "show --json omits extension frontmatter" '"tests"' "$tmp/tix" show "$sp_id" --json --compact
 check_status "approve fails when the approve hook fails" 1 env HOME="$tmp/plan-home" "$tmp/tix" approve "$sp_id"
 check "failed approve leaves the plan awaiting review" '"state":"awaiting_review"' "$tmp/tix" show "$sp_id" --json --compact
-check "queue lists the plan awaiting review" "sp-$sp_id [tier 1] planned (sbxplan, waiting" "$tmp/tix" queue
-check "queue --project filters" "plans/sp-$sp_id.md" "$tmp/tix" queue --project sbxplan
+check "queue lists the plan awaiting review" "$(ref "$sp_id") [tier 1] planned (sbxplan, waiting" "$tmp/tix" queue
+check "queue --project filters" "plans/$sp_ref.md" "$tmp/tix" queue --project sbxplan
 printf '#!/bin/sh\ncat >/dev/null\n[ "$TIX_HOOK" = approve ]\n' >"$sbx_repo/.tix/approve-hook"
 check "approve passes when the approve hook passes" "approved plan" env HOME="$tmp/plan-home" "$tmp/tix" approve "$sp_id"
-check_absent "queue drops an approved plan" "sp-$sp_id" "$tmp/tix" queue
+check_absent "queue drops an approved plan" "$(ref "$sp_id")" "$tmp/tix" queue
 
 # add --dry-run runs every add check and writes nothing; --json prints the ticket
 "$tmp/tix" projects add dryrun >/dev/null
@@ -612,7 +646,7 @@ check "add -p 9 errors instead of defaulting" "priority must be between 0 and 5,
 check "add -p -1 errors instead of defaulting" "priority must be between 0 and 5, got -1" "$tmp/tix" add --project dryrun "x" -b "b" -p -1
 check_absent "out-of-range adds write nothing" '"title":"x"' "$tmp/tix" list --project dryrun --json --compact
 dry_json=$("$tmp/tix" add --project dryrun "real add" -b "body" --json --compact)
-dry_id=$(sed -E 's/^\{"id":([0-9]+),.*/\1/' <<<"$dry_json")
+dry_id=$(sed -E 's/^\{"id":"([^"]+)",.*/\1/' <<<"$dry_json")
 check "add --json matches show --json" "$dry_json" "$tmp/tix" show "$dry_id" --json --compact
 
 # tix rules prints the ticket template and the rule registry; add errors cite rule ids

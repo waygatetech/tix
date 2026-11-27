@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -28,9 +29,12 @@ func setupTestDB(t *testing.T) {
 
 func ptr(i int) *int { return &i }
 
+func refPtr(r ticketRef) *ticketRef { return &r }
+
 // numberTickets gives every ticket without one a legacy number equal to its
-// rowid. The tools still take integer ids, which resolve as legacy numbers,
-// so this is what lets a test address tickets it just created as 1, 2, 3.
+// rowid. Ids that are integers, or all-digit strings, resolve as legacy
+// numbers, so this is what lets a test address tickets it just created as
+// 1, 2, 3.
 func numberTickets(t *testing.T) {
 	t.Helper()
 	raw, err := sql.Open("sqlite", os.Getenv("TIX_DB"))
@@ -57,7 +61,7 @@ func numbered(t *testing.T, text string) string {
 // legacyID is the id of the ticket numbered n.
 func legacyID(t *testing.T, n int) string {
 	t.Helper()
-	id, err := legacyRef(n)
+	id, err := tix.ResolveRef(strconv.Itoa(n))
 	if err != nil {
 		t.Fatalf("ticket %d: %v", n, err)
 	}
@@ -200,6 +204,66 @@ func connect(t *testing.T, ctx context.Context) *mcpsdk.ClientSession {
 	return clientSession
 }
 
+// An id argument takes a string ref or an integer legacy number. Both go
+// through the real protocol here, because the SDK validates arguments
+// against the advertised schema before a handler sees them.
+func TestIDArgumentsTakeStringsOrIntegers(t *testing.T) {
+	setupTestDB(t)
+	ctx := context.Background()
+	if _, _, err := tix.EnsureProject("acme"); err != nil {
+		t.Fatalf("EnsureProject: %v", err)
+	}
+	id, err := tix.Add("fix login", "it 500s", 2, "acme", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	numberTickets(t)
+	session := connect(t, ctx)
+
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tool := range tools.Tools {
+		schema, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatalf("marshal %s schema: %v", tool.Name, err)
+		}
+		if strings.Contains(string(schema), `"id"`) && !strings.Contains(string(schema), `"type":["string","integer"]`) {
+			t.Errorf("%s schema = %s, want its id typed [string, integer]", tool.Name, schema)
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		id   any
+	}{
+		{"full uuid", id},
+		{"hex prefix", id[:8]},
+		{"key and prefix", "ac-" + id[:8]},
+		{"integer legacy number", 1},
+		{"string legacy number", "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "tix_show", Arguments: map[string]any{"id": tc.id}})
+			if err != nil {
+				t.Fatalf("CallTool: %v", err)
+			}
+			if res.IsError {
+				t.Fatalf("tix_show(%v) failed: %s", tc.id, resultText(t, res))
+			}
+			if got := resultText(t, res); !strings.HasPrefix(got, id+" [P2] fix login") {
+				t.Errorf("tix_show(%v) = %q, want it to name %s", tc.id, got, id)
+			}
+		})
+	}
+
+	res, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "tix_show", Arguments: map[string]any{"id": true}})
+	if err == nil && !res.IsError {
+		t.Error("tix_show(true) succeeded, want a rejected id")
+	}
+}
+
 // testVersion is deliberately not a plausible release number, so a test that
 // passes cannot be one that matched a literal left in the server.
 const testVersion = "v9.9.9-test"
@@ -322,7 +386,7 @@ func TestAddBatchWiresDependenciesAndExistingEpics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	epic := legacyNumber(t, epicID)
+	epic := ticketRef(epicID)
 
 	_, _, err = addBatchTool(context.Background(), nil, addBatchArgs{
 		Project: "acme",
@@ -367,7 +431,7 @@ func TestReorderToolSetsWorkOrder(t *testing.T) {
 		t.Fatalf("ListTickets: %v", err)
 	}
 
-	res, _, err := reorderTool(context.Background(), nil, reorderArgs{IDs: []int{legacyNumber(t, before[1].ID), legacyNumber(t, before[0].ID)}})
+	res, _, err := reorderTool(context.Background(), nil, reorderArgs{IDs: []ticketRef{ticketRef(before[1].ID), ticketRef(before[0].ID)}})
 	if err != nil {
 		t.Fatalf("reorderTool: %v", err)
 	}
@@ -442,7 +506,7 @@ func TestAddBatchRejectsBadBatchWholesale(t *testing.T) {
 			name: "both parent forms",
 			args: addBatchArgs{Project: "batch", Create: true, Tickets: []batchTicket{
 				{Title: "epic", Body: "b"},
-				{Title: "child", Body: "b", ParentIndex: ptr(0), ParentID: ptr(99)},
+				{Title: "child", Body: "b", ParentIndex: ptr(0), ParentID: refPtr("99")},
 			}},
 			want: "use either parent_index or parent_id",
 		},
@@ -526,7 +590,7 @@ func TestToolsRenderPlainText(t *testing.T) {
 	}
 
 	numberTickets(t)
-	res, _, err = showTool(ctx, nil, showArgs{ID: 1})
+	res, _, err = showTool(ctx, nil, showArgs{ID: "1"})
 	if err != nil {
 		t.Fatalf("showTool: %v", err)
 	}
@@ -545,7 +609,7 @@ func TestToolsRenderPlainText(t *testing.T) {
 
 	numberTickets(t)
 	done := "done"
-	if _, _, err := editTool(ctx, nil, editArgs{ID: 2, Status: &done}); err != nil {
+	if _, _, err := editTool(ctx, nil, editArgs{ID: "2", Status: &done}); err != nil {
 		t.Fatalf("editTool: %v", err)
 	}
 	res, _, err = listTool(ctx, nil, listArgs{Project: "acme", All: true})
@@ -582,9 +646,9 @@ func TestNoteToolAppendsAndShowPrintsIt(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"appends a note", noteArgs{ID: 1, Body: "blocked on lease; next: retry"}, "noted 1", false},
-		{"rejects an empty note", noteArgs{ID: 1}, "", true},
-		{"rejects a missing ticket", noteArgs{ID: 99, Body: "x"}, "", true},
+		{"appends a note", noteArgs{ID: "1", Body: "blocked on lease; next: retry"}, "noted 1", false},
+		{"rejects an empty note", noteArgs{ID: "1"}, "", true},
+		{"rejects a missing ticket", noteArgs{ID: "99", Body: "x"}, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -598,7 +662,7 @@ func TestNoteToolAppendsAndShowPrintsIt(t *testing.T) {
 		})
 	}
 
-	res, _, err := showTool(ctx, nil, showArgs{ID: 1})
+	res, _, err := showTool(ctx, nil, showArgs{ID: "1"})
 	if err != nil {
 		t.Fatalf("showTool: %v", err)
 	}
@@ -676,7 +740,7 @@ func TestListFiltersAndLimits(t *testing.T) {
 	}
 	numberTickets(t)
 	done := "done"
-	if _, _, err := editTool(ctx, nil, editArgs{ID: 2, Status: &done}); err != nil {
+	if _, _, err := editTool(ctx, nil, editArgs{ID: "2", Status: &done}); err != nil {
 		t.Fatalf("editTool: %v", err)
 	}
 
@@ -743,7 +807,7 @@ func TestSearchToolFindsTicketsInAnyStatus(t *testing.T) {
 	}
 	numberTickets(t)
 	done := "done"
-	if _, _, err := editTool(ctx, nil, editArgs{ID: 2, Status: &done}); err != nil {
+	if _, _, err := editTool(ctx, nil, editArgs{ID: "2", Status: &done}); err != nil {
 		t.Fatalf("editTool: %v", err)
 	}
 
@@ -842,14 +906,14 @@ func TestToolsRejectBadArguments(t *testing.T) {
 		},
 		{
 			name: "show an id that does not exist",
-			call: func() error { _, _, err := showTool(ctx, nil, showArgs{ID: 404}); return err },
+			call: func() error { _, _, err := showTool(ctx, nil, showArgs{ID: "404"}); return err },
 			want: "no such ticket: 404",
 		},
 		{
 			name: "edit an id that does not exist",
 			call: func() error {
 				title := "new"
-				_, _, err := editTool(ctx, nil, editArgs{ID: 404, Title: &title})
+				_, _, err := editTool(ctx, nil, editArgs{ID: "404", Title: &title})
 				return err
 			},
 			want: "404",
@@ -858,14 +922,14 @@ func TestToolsRejectBadArguments(t *testing.T) {
 			// An edit naming no field at all is a call that meant to change
 			// something, so it is an error rather than a no-op reply.
 			name: "edit with no fields",
-			call: func() error { _, _, err := editTool(ctx, nil, editArgs{ID: 1}); return err },
+			call: func() error { _, _, err := editTool(ctx, nil, editArgs{ID: "1"}); return err },
 			want: "no fields to update",
 		},
 		{
 			name: "edit into a project that does not exist",
 			call: func() error {
 				project := "nope"
-				_, _, err := editTool(ctx, nil, editArgs{ID: 1, Project: &project})
+				_, _, err := editTool(ctx, nil, editArgs{ID: "1", Project: &project})
 				return err
 			},
 			want: "nope",

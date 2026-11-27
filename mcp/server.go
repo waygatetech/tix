@@ -3,11 +3,14 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/waygatetech/tix/internal/tix"
 )
@@ -34,6 +37,7 @@ func NewServer(version string) *mcp.Server {
 			"epic and depends_on_ids for tickets that must finish first. The project " +
 			"must already exist; call tix_projects to see the names, or pass " +
 			"create=true to make a new one.",
+		InputSchema: inputSchema[addArgs](),
 	}, addTool)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -47,11 +51,13 @@ func NewServer(version string) *mcp.Server {
 			"listed within a priority, so list them in the order they should be done. " +
 			"The project must already exist; call tix_projects to see the " +
 			"names, or pass create=true to make a new one. " + sizeRule,
+		InputSchema: inputSchema[addBatchArgs](),
 	}, addBatchTool)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tix_list",
 		Description: "List tickets in a project, optionally filtered by status/priority.",
+		InputSchema: inputSchema[listArgs](),
 	}, listTool)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -64,17 +70,20 @@ func NewServer(version string) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tix_show",
 		Description: "Show a single ticket by id.",
+		InputSchema: inputSchema[showArgs](),
 	}, showTool)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "tix_edit",
 		Description: "Edit fields of an existing ticket. Only fields provided are changed.",
+		InputSchema: inputSchema[editArgs](),
 	}, editTool)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "tix_note",
 		Description: "Append a timestamped handoff note to a ticket: context for whoever " +
 			"picks it up next. Notes are append-only and tix_show prints them.",
+		InputSchema: inputSchema[noteArgs](),
 	}, noteTool)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -82,6 +91,7 @@ func NewServer(version string) *mcp.Server {
 		Description: "Set the work order of tickets: the ids given are moved, in the order " +
 			"listed, after every other ticket. Order only breaks ties within a " +
 			"priority, so change priority with tix_edit to move a ticket across tiers.",
+		InputSchema: inputSchema[reorderArgs](),
 	}, reorderTool)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -164,9 +174,10 @@ func instructions() string {
 // generate no output schema, and build the text themselves.
 //
 // The text mirrors the CLI's formatting, which is measurably shorter than the
-// JSON it replaced. The one deliberate difference is that ids print bare
-// rather than prefixed: the tools take an integer id, so `78` is what a client
-// can hand back to tix_show, and `ti-78` is not.
+// JSON it replaced. The one deliberate difference is that ids print as full
+// UUIDs rather than the CLI's short <key>-<hex> form: a short form can turn
+// ambiguous once a later ticket shares its prefix, and the full UUID a client
+// hands back always resolves.
 func textResult(text string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}
 }
@@ -202,24 +213,57 @@ func ticketDetail(t tix.Ticket) string {
 	return detail
 }
 
-// The tool schemas still take integer ids until they switch to strings, so
-// each integer is looked up as a ticket's legacy number.
-func legacyRef(n int) (string, error) {
-	return tix.ResolveRef(strconv.Itoa(n))
+// ticketRef is a ticket id argument: a string ref the CLI would accept (a
+// UUID, a hex prefix, either behind the project key) or an integer, which is
+// a ticket's legacy number. Integers are accepted for one release so clients
+// written against integer ids keep working.
+type ticketRef string
+
+func (r *ticketRef) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*r = ticketRef(s)
+		return nil
+	}
+	var n int64
+	if err := json.Unmarshal(data, &n); err != nil {
+		return fmt.Errorf("ticket id must be a string or an integer, got %s", data)
+	}
+	*r = ticketRef(strconv.FormatInt(n, 10))
+	return nil
 }
 
-func legacyRefPtr(n *int) (*string, error) {
-	if n == nil {
+// inputSchema is the tool's argument schema, with every ticketRef typed as a
+// string or an integer: inferred from ticketRef alone it would be string-only,
+// and the SDK validates arguments against it before they reach UnmarshalJSON.
+func inputSchema[T any]() *jsonschema.Schema {
+	schema, err := jsonschema.For[T](&jsonschema.ForOptions{TypeSchemas: map[reflect.Type]*jsonschema.Schema{
+		reflect.TypeFor[ticketRef](): {Types: []string{"string", "integer"}},
+	}})
+	if err != nil {
+		// The argument types are fixed at compile time, so this is a
+		// programming error rather than anything a caller can cause.
+		panic(fmt.Sprintf("inferring tool input schema: %v", err))
+	}
+	return schema
+}
+
+func resolveRef(r ticketRef) (string, error) {
+	return tix.ResolveRef(string(r))
+}
+
+func resolveRefPtr(r *ticketRef) (*string, error) {
+	if r == nil {
 		return nil, nil
 	}
-	id, err := legacyRef(*n)
+	id, err := resolveRef(*r)
 	return &id, err
 }
 
-func legacyRefs(ns []int) ([]string, error) {
-	ids := make([]string, len(ns))
-	for i, n := range ns {
-		id, err := legacyRef(n)
+func resolveRefs(refs []ticketRef) ([]string, error) {
+	ids := make([]string, len(refs))
+	for i, r := range refs {
+		id, err := resolveRef(r)
 		if err != nil {
 			return nil, err
 		}
@@ -229,13 +273,13 @@ func legacyRefs(ns []int) ([]string, error) {
 }
 
 type addArgs struct {
-	Title        string `json:"title" jsonschema:"the ticket title"`
-	Body         string `json:"body" jsonschema:"the ticket body/description"`
-	Priority     *int   `json:"priority,omitempty" jsonschema:"priority 0-5, lower is more urgent (default 2)"`
-	Project      string `json:"project" jsonschema:"the project the ticket belongs to; must be an existing project unless create is true"`
-	Create       bool   `json:"create,omitempty" jsonschema:"create the project if it does not exist yet"`
-	ParentID     *int   `json:"parent_id,omitempty" jsonschema:"id of a ticket in the same project to group this one under (epic)"`
-	DependsOnIDs []int  `json:"depends_on_ids,omitempty" jsonschema:"ticket ids this ticket depends on; unresolved dependencies make the new ticket blocked"`
+	Title        string      `json:"title" jsonschema:"the ticket title"`
+	Body         string      `json:"body" jsonschema:"the ticket body/description"`
+	Priority     *int        `json:"priority,omitempty" jsonschema:"priority 0-5, lower is more urgent (default 2)"`
+	Project      string      `json:"project" jsonschema:"the project the ticket belongs to; must be an existing project unless create is true"`
+	Create       bool        `json:"create,omitempty" jsonschema:"create the project if it does not exist yet"`
+	ParentID     *ticketRef  `json:"parent_id,omitempty" jsonschema:"id of a ticket in the same project to group this one under (epic)"`
+	DependsOnIDs []ticketRef `json:"depends_on_ids,omitempty" jsonschema:"ticket ids this ticket depends on; unresolved dependencies make the new ticket blocked"`
 }
 
 func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.CallToolResult, any, error) {
@@ -250,11 +294,11 @@ func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.Call
 	if err != nil {
 		return nil, nil, err
 	}
-	parentID, err := legacyRefPtr(args.ParentID)
+	parentID, err := resolveRefPtr(args.ParentID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parent_id: %w", err)
 	}
-	dependsOn, err := legacyRefs(args.DependsOnIDs)
+	dependsOn, err := resolveRefs(args.DependsOnIDs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("depends_on_ids: %w", err)
 	}
@@ -290,13 +334,13 @@ func resolveProject(name string, create bool) (string, error) {
 }
 
 type batchTicket struct {
-	Title            string `json:"title" jsonschema:"the ticket title"`
-	Body             string `json:"body" jsonschema:"the ticket body/description"`
-	Priority         *int   `json:"priority,omitempty" jsonschema:"priority 0-5, lower is more urgent (default 2)"`
-	ParentIndex      *int   `json:"parent_index,omitempty" jsonschema:"zero-based index of an earlier ticket in this batch to use as this ticket's parent (epic)"`
-	ParentID         *int   `json:"parent_id,omitempty" jsonschema:"id of an existing ticket to use as this ticket's parent (epic); conflicts with parent_index"`
-	DependsOnIndexes []int  `json:"depends_on_indexes,omitempty" jsonschema:"zero-based indexes of earlier tickets in this batch that must be done before this one"`
-	DependsOnIDs     []int  `json:"depends_on_ids,omitempty" jsonschema:"ids of existing tickets that must be done before this one"`
+	Title            string      `json:"title" jsonschema:"the ticket title"`
+	Body             string      `json:"body" jsonschema:"the ticket body/description"`
+	Priority         *int        `json:"priority,omitempty" jsonschema:"priority 0-5, lower is more urgent (default 2)"`
+	ParentIndex      *int        `json:"parent_index,omitempty" jsonschema:"zero-based index of an earlier ticket in this batch to use as this ticket's parent (epic)"`
+	ParentID         *ticketRef  `json:"parent_id,omitempty" jsonschema:"id of an existing ticket to use as this ticket's parent (epic); conflicts with parent_index"`
+	DependsOnIndexes []int       `json:"depends_on_indexes,omitempty" jsonschema:"zero-based indexes of earlier tickets in this batch that must be done before this one"`
+	DependsOnIDs     []ticketRef `json:"depends_on_ids,omitempty" jsonschema:"ids of existing tickets that must be done before this one"`
 }
 
 type addBatchArgs struct {
@@ -339,7 +383,7 @@ func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) 
 	ids := make([]string, 0, len(args.Tickets))
 	for i, ticket := range args.Tickets {
 		priority := normalizePriority(ticket.Priority)
-		parentID, err := legacyRefPtr(ticket.ParentID)
+		parentID, err := resolveRefPtr(ticket.ParentID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("tickets[%d].parent_id: %w", i, err)
 		}
@@ -347,7 +391,7 @@ func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) 
 			parent := ids[*ticket.ParentIndex]
 			parentID = &parent
 		}
-		dependsOn, err := legacyRefs(ticket.DependsOnIDs)
+		dependsOn, err := resolveRefs(ticket.DependsOnIDs)
 		if err != nil {
 			return nil, nil, fmt.Errorf("tickets[%d].depends_on_ids: %w", i, err)
 		}
@@ -369,12 +413,12 @@ func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) 
 }
 
 type listArgs struct {
-	Project  string `json:"project" jsonschema:"the project to list tickets for"`
-	All      bool   `json:"all,omitempty" jsonschema:"include tickets in all statuses, not just open ones"`
-	Status   string `json:"status,omitempty" jsonschema:"filter by exact status (e.g. open, in_progress, done)"`
-	Priority *int   `json:"priority,omitempty" jsonschema:"filter by exact priority"`
-	Limit    int    `json:"limit,omitempty" jsonschema:"limit the number of tickets returned (0 = no limit)"`
-	ParentID *int   `json:"parent_id,omitempty" jsonschema:"only tickets grouped under this parent ticket id (epic)"`
+	Project  string     `json:"project" jsonschema:"the project to list tickets for"`
+	All      bool       `json:"all,omitempty" jsonschema:"include tickets in all statuses, not just open ones"`
+	Status   string     `json:"status,omitempty" jsonschema:"filter by exact status (e.g. open, in_progress, done)"`
+	Priority *int       `json:"priority,omitempty" jsonschema:"filter by exact priority"`
+	Limit    int        `json:"limit,omitempty" jsonschema:"limit the number of tickets returned (0 = no limit)"`
+	ParentID *ticketRef `json:"parent_id,omitempty" jsonschema:"only tickets grouped under this parent ticket id (epic)"`
 }
 
 func listTool(_ context.Context, _ *mcp.CallToolRequest, args listArgs) (*mcp.CallToolResult, any, error) {
@@ -384,7 +428,7 @@ func listTool(_ context.Context, _ *mcp.CallToolRequest, args listArgs) (*mcp.Ca
 	if args.Limit < 0 {
 		return nil, nil, fmt.Errorf("limit must be >= 0")
 	}
-	parentID, err := legacyRefPtr(args.ParentID)
+	parentID, err := resolveRefPtr(args.ParentID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parent_id: %w", err)
 	}
@@ -463,11 +507,11 @@ func searchTool(_ context.Context, _ *mcp.CallToolRequest, args searchArgs) (*mc
 }
 
 type showArgs struct {
-	ID int `json:"id" jsonschema:"the ticket id"`
+	ID ticketRef `json:"id" jsonschema:"the ticket id"`
 }
 
 func showTool(_ context.Context, _ *mcp.CallToolRequest, args showArgs) (*mcp.CallToolResult, any, error) {
-	id, err := legacyRef(args.ID)
+	id, err := resolveRef(args.ID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -490,32 +534,32 @@ func showTool(_ context.Context, _ *mcp.CallToolRequest, args showArgs) (*mcp.Ca
 }
 
 type noteArgs struct {
-	ID   int    `json:"id" jsonschema:"the ticket id"`
-	Body string `json:"body" jsonschema:"the note: what was done, what was decided and by whom, what's next, files touched"`
+	ID   ticketRef `json:"id" jsonschema:"the ticket id"`
+	Body string    `json:"body" jsonschema:"the note: what was done, what was decided and by whom, what's next, files touched"`
 }
 
 func noteTool(_ context.Context, _ *mcp.CallToolRequest, args noteArgs) (*mcp.CallToolResult, any, error) {
-	id, err := legacyRef(args.ID)
+	id, err := resolveRef(args.ID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("note failed: %w", err)
 	}
 	if err := tix.Note(id, args.Body); err != nil {
 		return nil, nil, fmt.Errorf("note failed: %w", err)
 	}
-	return textResult(fmt.Sprintf("noted %d", args.ID)), nil, nil
+	return textResult(fmt.Sprintf("noted %s", args.ID)), nil, nil
 }
 
 type editArgs struct {
-	ID                int     `json:"id" jsonschema:"the ticket id"`
-	Title             *string `json:"title,omitempty" jsonschema:"new ticket title"`
-	Body              *string `json:"body,omitempty" jsonschema:"new ticket body"`
-	Status            *string `json:"status,omitempty" jsonschema:"new ticket status (e.g. open, in_progress, done)"`
-	Priority          *int    `json:"priority,omitempty" jsonschema:"new ticket priority"`
-	Project           *string `json:"project,omitempty" jsonschema:"new project name"`
-	ParentID          *int    `json:"parent_id,omitempty" jsonschema:"id of a ticket in the same project to group this one under (epic)"`
-	ClearParent       bool    `json:"clear_parent,omitempty" jsonschema:"remove this ticket's parent; conflicts with parent_id"`
-	DependsOnIDs      *[]int  `json:"depends_on_ids,omitempty" jsonschema:"replace the ticket ids this ticket depends on"`
-	ClearDependencies bool    `json:"clear_dependencies,omitempty" jsonschema:"remove this ticket's dependencies; conflicts with depends_on_ids"`
+	ID                ticketRef    `json:"id" jsonschema:"the ticket id"`
+	Title             *string      `json:"title,omitempty" jsonschema:"new ticket title"`
+	Body              *string      `json:"body,omitempty" jsonschema:"new ticket body"`
+	Status            *string      `json:"status,omitempty" jsonschema:"new ticket status (e.g. open, in_progress, done)"`
+	Priority          *int         `json:"priority,omitempty" jsonschema:"new ticket priority"`
+	Project           *string      `json:"project,omitempty" jsonschema:"new project name"`
+	ParentID          *ticketRef   `json:"parent_id,omitempty" jsonschema:"id of a ticket in the same project to group this one under (epic)"`
+	ClearParent       bool         `json:"clear_parent,omitempty" jsonschema:"remove this ticket's parent; conflicts with parent_id"`
+	DependsOnIDs      *[]ticketRef `json:"depends_on_ids,omitempty" jsonschema:"replace the ticket ids this ticket depends on"`
+	ClearDependencies bool         `json:"clear_dependencies,omitempty" jsonschema:"remove this ticket's dependencies; conflicts with depends_on_ids"`
 }
 
 func editTool(_ context.Context, _ *mcp.CallToolRequest, args editArgs) (*mcp.CallToolResult, any, error) {
@@ -525,17 +569,17 @@ func editTool(_ context.Context, _ *mcp.CallToolRequest, args editArgs) (*mcp.Ca
 	if args.DependsOnIDs != nil && args.ClearDependencies {
 		return nil, nil, fmt.Errorf("use either depends_on_ids or clear_dependencies, not both")
 	}
-	id, err := legacyRef(args.ID)
+	id, err := resolveRef(args.ID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("edit failed: %w", err)
 	}
-	parentID, err := legacyRefPtr(args.ParentID)
+	parentID, err := resolveRefPtr(args.ParentID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parent_id: %w", err)
 	}
 	var dependsOn *[]string
 	if args.DependsOnIDs != nil {
-		ids, err := legacyRefs(*args.DependsOnIDs)
+		ids, err := resolveRefs(*args.DependsOnIDs)
 		if err != nil {
 			return nil, nil, fmt.Errorf("depends_on_ids: %w", err)
 		}
@@ -561,11 +605,11 @@ func editTool(_ context.Context, _ *mcp.CallToolRequest, args editArgs) (*mcp.Ca
 }
 
 type reorderArgs struct {
-	IDs []int `json:"ids" jsonschema:"ticket ids in the order they should be worked"`
+	IDs []ticketRef `json:"ids" jsonschema:"ticket ids in the order they should be worked"`
 }
 
 func reorderTool(_ context.Context, _ *mcp.CallToolRequest, args reorderArgs) (*mcp.CallToolResult, any, error) {
-	ids, err := legacyRefs(args.IDs)
+	ids, err := resolveRefs(args.IDs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reorder failed: %w", err)
 	}

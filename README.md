@@ -75,7 +75,7 @@ tix next --project acme
 tix claim-next --project acme
 
 # wrap up
-tix done 1
+tix done ac-a3f9
 
 # find tickets an agent claimed and never finished
 tix stale --project acme
@@ -117,9 +117,9 @@ Priorities sort ascending, so `P0` appears before `P2`. Tickets with the same pr
 A ticket can depend on other tickets in the same project:
 
 ```sh
-tix add "B" --project acme -b "blocked until A ships" --depends-on ac-1
-tix edit ac-4 --depends-on ac-3 --depends-on ac-7
-tix edit ac-4 --no-dependencies
+tix add "B" --project acme -b "blocked until A ships" --depends-on ac-a3f9
+tix edit ac-7c21 --depends-on ac-0b9e --depends-on ac-e417
+tix edit ac-7c21 --no-dependencies
 ```
 
 Tickets with unfinished dependencies are marked `blocked`, and `next`/`claim-next` skip them even if an agent manually sets their status back to `open`. When a dependency is marked done, tickets that were blocked only by that dependency chain are automatically moved back to `open`; an agent can still mark one `blocked` again for any non-dependency reason.
@@ -153,23 +153,27 @@ Any directory inside the repository counts, and the deepest registered repo wins
 
 ### Ticket IDs
 
-One database holds every project, so ticket IDs are unique across all of them. Output displays them with a short project prefix, which tells you which repo a ticket belongs to without a lookup:
+A ticket's ID is a random UUIDv4, so IDs are unique across every project in the database and across databases. Output shows the project prefix and the shortest hex prefix of the UUID that no other ticket shares, at least four characters, which tells you which repo a ticket belongs to without a lookup:
 
 ```
-fe-47 [P2] fix login redirect
+fe-a3f9 [P2] fix login redirect
 ```
 
-Any command taking an ID accepts either form — `tix done 47` and `tix done fe-47` both work, so IDs already in shell history and scripts stay valid. The difference is that the prefixed form is checked: if ticket 47 is not a `fe` ticket, the command fails instead of acting on the wrong project's ticket.
+Any command taking an ID accepts any unique hex prefix or the full UUID, with or without the project prefix: `tix done a3f9`, `tix done fe-a3f9b`, and `tix done a3f9b2c1-...` all name the same ticket. A prefix that matches more than one ticket is an error that lists them, so type a few more characters. The prefixed form is also checked: if `a3f9` is not a `fe` ticket, the command fails instead of acting on the wrong project's ticket.
+
+A displayed short ID gets longer when a newer ticket starts with the same hex, so the short form you copied last week may print with an extra character today. The old one still works as long as it is unique, and the full UUID always works.
+
+Tickets created before UUIDs keep their old number, and it still resolves: `tix show 47` and `tix show fe-47` find the ticket that was 47. An all-digit input that matches both an old number and a hex prefix is an error that lists both.
 
 Mutations also name the project they touched, so a bare ID still leaves a record of which backlog changed:
 
 ```
-ac-1 done (acme: fix login bug)
+ac-a3f9 done (acme: fix login bug)
 ```
 
-For the same reason `show`, `bump`, and `done` take an optional `--project`, which asserts the target rather than scoping the lookup: `tix done 47 --project frontend` fails if 47 belongs to another project. `tix edit --project` is the exception — there it sets a *new* project, and the confirmation reports the move as `moved from backend to frontend`.
+For the same reason `show`, `bump`, and `done` take an optional `--project`, which asserts the target rather than scoping the lookup: `tix done a3f9 --project frontend` fails if that ticket belongs to another project. `tix edit --project` is the exception — there it sets a *new* project, and the confirmation reports the move as `moved from backend to frontend`.
 
-The ID is an integer everywhere it is consumed by a program. `--json` output and the MCP tools emit `"id": 47`, never the prefixed string, so the prefix is purely a display and input convenience.
+Programs get the full UUID as a string: `--json` output emits `"id": "a3f9b2c1-..."`, and `parent_id`, `depends_on`, and `blocked_by` hold UUIDs too. The MCP tools take a string ID, and for now also an integer, which is read as an old ticket number.
 
 Prefixes are derived from project names automatically — the shortest unique lowercase prefix of the name. Adding a project whose name collides can shift another project's derived prefix, so pin one when you want it fixed:
 
@@ -231,7 +235,7 @@ Most read commands support `--json` for scripting, plus `--compact` (single-line
 
 ```sh
 tix list --project acme --json --fields id,title,priority
-tix show 1 --json --compact
+tix show ac-a3f9 --json --compact
 ```
 
 Reach for `--json` when a program parses the output. For reading — including by an AI agent — the default plain text is shorter than JSON for every command, even filtered and compacted.

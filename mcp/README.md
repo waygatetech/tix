@@ -43,13 +43,13 @@ Every ticket in a batch lands in the same project; move one afterwards with `tix
 
 ```
 created 2 in tix
-84 [P1] Add tix_add_batch
-85 [P2] Document the batch tool
+3c1f9a2e-5b7d-4e08-9a61-2f4d8c0b7e13 [P1] Add tix_add_batch
+d84e0b6a-1c2f-4f9e-b3a7-6e5d9c2a1f40 [P2] Document the batch tool
 ```
 
 To create an epic with subtasks, put the epic first and give each child its
 zero-based `parent_index` in the batch. This avoids a second call just to learn
-the epic's generated database id:
+the epic's generated id:
 
 ```json
 {
@@ -95,7 +95,7 @@ The server also hands the client its instructions at connect time, and they carr
 
 ## Replies are one block of plain text
 
-Each tool returns a single text block in the CLI's formatting — `78 [P1] title` for a listing, `78 [P1] title (open, tix)` plus the body for one ticket, `tix open=5 total=5` per project — and nothing else.
+Each tool returns a single text block in the CLI's formatting — `<uuid> [P1] title` for a listing, `<uuid> [P1] title (open, tix)` plus the body for one ticket, `tix open=5 total=5` per project — and nothing else.
 
 It used to return the whole payload as JSON *twice*, once as the text block and once as `structuredContent`, with a generated `outputSchema` on every tool to describe it. Nothing consumed the structured half, and the schemas sat in context for the entire session. Dropping both, measured against this repo's own backlog:
 
@@ -106,7 +106,9 @@ It used to return the whole payload as JSON *twice*, once as the text block and 
 | `tix_show` | 348 bytes | **120 bytes** |
 | `tix_projects` | 236 bytes | **57 bytes** |
 
-Ids print bare rather than with the CLI's project prefix: these tools take an integer `id`, so `78` is what a client can hand back to `tix_show`, and `ti-78` is not. A client that genuinely needs to parse replies should use the CLI's `--json`, which is still there for programs.
+Ids print as the full UUID rather than the CLI's short `ti-a3f9` form. A short form can turn ambiguous once a newer ticket shares its prefix, and the full UUID a client hands back to `tix_show` always resolves.
+
+Every id argument (`id`, `ids`, `parent_id`, `depends_on_ids`) takes a string: the full UUID, a unique hex prefix, or either behind the project key, the same refs the CLI accepts. For one release they also take an integer, which is read as a ticket's number from before UUIDs, so clients written against integer ids keep working on old tickets. A client that genuinely needs to parse replies should use the CLI's `--json`, which is still there for programs.
 
 ## Register with Claude Desktop
 
