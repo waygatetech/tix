@@ -138,11 +138,16 @@ func DefaultPlanPath(ticket Ticket) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	legacy, err := legacyNumber(ticket.ID)
+	if err != nil {
+		return "", err
+	}
 	dir := filepath.Join(repo, "plans")
-	// A plan written before the ticket's short id grew keeps its old name.
+	// A plan written before the ticket's short id grew, or before UUIDs,
+	// keeps its old name.
 	if existing, err := filepath.Glob(filepath.Join(dir, prefix+"-*.md")); err == nil {
 		for _, path := range existing {
-			if refMatchesID(strings.TrimSuffix(filepath.Base(path), ".md"), prefix, ticket.ID) {
+			if refMatchesID(strings.TrimSuffix(filepath.Base(path), ".md"), prefix, ticket.ID, legacy) {
 				return path, nil
 			}
 		}

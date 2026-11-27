@@ -60,7 +60,11 @@ func Check(ctx context.Context, id string, base string) (CheckResult, error) {
 	if err != nil {
 		return CheckResult{}, err
 	}
-	dir := ticketDir(ctx, repo, prefix, id)
+	legacy, err := legacyNumber(id)
+	if err != nil {
+		return CheckResult{}, err
+	}
+	dir := ticketDir(ctx, repo, prefix, id, legacy)
 
 	mergeBase, err := git(ctx, dir, "merge-base", "HEAD", base)
 	if err != nil {
@@ -119,11 +123,12 @@ func Check(ctx context.Context, id string, base string) (CheckResult, error) {
 // ticket's <key>-<id>.
 const worktreesDir = ".worktrees"
 
-// ticketDir is where a ticket's work lives: <repo>/.worktrees/<prefix>-<hex>
-// when git lists it as a worktree of repo, else repo. Any hex prefix of id
-// counts, since the worktree may predate its short id growing. Anything git
-// cannot answer, such as a repo that is not a git checkout, falls back to repo.
-func ticketDir(ctx context.Context, repo, prefix, id string) string {
+// ticketDir is where a ticket's work lives: <repo>/.worktrees/<prefix>-<hex>,
+// or <prefix>-<legacy> for a ticket numbered before UUIDs, when git lists it
+// as a worktree of repo, else repo. Any hex prefix of id counts, since the
+// worktree may predate its short id growing. Anything git cannot answer, such
+// as a repo that is not a git checkout, falls back to repo.
+func ticketDir(ctx context.Context, repo, prefix, id string, legacy int) string {
 	if repo == "" {
 		return repo
 	}
@@ -132,7 +137,7 @@ func ticketDir(ctx context.Context, repo, prefix, id string) string {
 		return repo
 	}
 	for _, candidate := range candidates {
-		if refMatchesID(filepath.Base(candidate), prefix, id) && isWorktree(ctx, repo, candidate) {
+		if refMatchesID(filepath.Base(candidate), prefix, id, legacy) && isWorktree(ctx, repo, candidate) {
 			return candidate
 		}
 	}

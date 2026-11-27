@@ -1,6 +1,7 @@
 package tix
 
 import (
+	"database/sql"
 	"fmt"
 	"regexp"
 	"sort"
@@ -242,14 +243,27 @@ func RefFor(project, id string) (string, error) {
 	return FormatID(prefix, id, shorts), nil
 }
 
-// refMatchesID reports whether a name written as <key>-<hex> earlier, such
-// as a worktree or plan file, still names id: short ids grow as tickets are
-// added, so any hex prefix of the id counts.
-func refMatchesID(name, prefix, id string) bool {
+// refMatchesID reports whether a name written earlier, such as a worktree or
+// plan file, still names id. Short ids grow as tickets are added, so any hex
+// prefix of the id counts; so does <key>-<legacy> for a ticket numbered before
+// UUIDs (legacy is 0 when it was not).
+func refMatchesID(name, prefix, id string, legacy int) bool {
+	if legacy > 0 && name == prefix+"-"+strconv.Itoa(legacy) {
+		return true
+	}
 	hex, ok := strings.CutPrefix(name, prefix+"-")
 	hex = strings.ToLower(strings.ReplaceAll(hex, "-", ""))
 	return ok && len(hex) >= minShortID && isHex(hex) &&
 		strings.HasPrefix(strings.ReplaceAll(id, "-", ""), hex)
+}
+
+// legacyNumber is a ticket's number from before UUIDs, or 0 when it has none.
+func legacyNumber(id string) (int, error) {
+	var n sql.NullInt64
+	if err := db.QueryRow(`SELECT legacy_id FROM tickets WHERE id = ?`, id).Scan(&n); err != nil {
+		return 0, fmt.Errorf("reading legacy number of %s: %w", id, err)
+	}
+	return int(n.Int64), nil
 }
 
 // minShortID is the fewest hex characters a displayed ticket id uses.

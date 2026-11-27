@@ -85,7 +85,11 @@ func RunDone(ctx context.Context, id string, cwd string) error {
 	if wt := linkedWorktree(ctx, repo, cwd); wt != "" {
 		repo = wt
 	} else {
-		repo = ticketDir(ctx, repo, prefix, id)
+		legacy, err := legacyNumber(id)
+		if err != nil {
+			return err
+		}
+		repo = ticketDir(ctx, repo, prefix, id, legacy)
 	}
 	attempt := doneAttempt{Result: "pass"}
 	if hook == "" {

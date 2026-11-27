@@ -169,21 +169,24 @@ func TestTicketDir(t *testing.T) {
 		stray  = "b0b0b2c1-0000-4000-8000-000000000002"
 		none   = "c0c0b2c1-0000-4000-8000-000000000003"
 	)
-	repo, _ := gitRepo(t, "ap-a3f9")
+	repo, _ := gitRepo(t, "ap-a3f9", "ap-852")
 	if err := os.MkdirAll(filepath.Join(repo, worktreesDir, "ap-b0b0"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
-		name string
-		repo string
-		id   string
-		want string
+		name   string
+		repo   string
+		id     string
+		legacy int
+		want   string
 	}{
 		// The worktree keeps its name after the ticket's short id grows.
-		{"git worktree named by a prefix of the id", repo, worked, filepath.Join(repo, worktreesDir, "ap-a3f9")},
-		{"stray directory", repo, stray, repo},
-		{"no worktree", repo, none, repo},
-		{"not a git repo", t.TempDir(), worked, ""},
+		{"git worktree named by a prefix of the id", repo, worked, 0, filepath.Join(repo, worktreesDir, "ap-a3f9")},
+		// A ticket migrated from a numbered id keeps the worktree named for it.
+		{"git worktree named by the legacy number", repo, none, 852, filepath.Join(repo, worktreesDir, "ap-852")},
+		{"stray directory", repo, stray, 0, repo},
+		{"no worktree", repo, none, 0, repo},
+		{"not a git repo", t.TempDir(), worked, 0, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -191,7 +194,7 @@ func TestTicketDir(t *testing.T) {
 			if want == "" {
 				want = tt.repo
 			}
-			if got := ticketDir(context.Background(), tt.repo, "ap", tt.id); got != want {
+			if got := ticketDir(context.Background(), tt.repo, "ap", tt.id, tt.legacy); got != want {
 				t.Fatalf("ticketDir() = %q, want %q", got, want)
 			}
 		})

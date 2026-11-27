@@ -616,3 +616,61 @@ func TestListByConcept(t *testing.T) {
 		})
 	}
 }
+
+// A plan written under an earlier name of the ticket is found again: the
+// legacy number of a migrated ticket, or a shorter hex prefix.
+func TestDefaultPlanPathFindsEarlierNames(t *testing.T) {
+	setupTestDB(t)
+	repo := t.TempDir()
+	if _, err := CreateProject(Project{Name: "frontend", Key: "fe", RepoPath: repo}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	id, err := Add("plan me", "", 1, "frontend", nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE tickets SET legacy_id = 852 WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	ticket, err := Show(id)
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	current, err := RefFor("frontend", id)
+	if err != nil {
+		t.Fatalf("RefFor: %v", err)
+	}
+	plans := filepath.Join(repo, "plans")
+	tests := []struct {
+		name  string
+		files []string
+		want  string
+	}{
+		{"no plan yet uses the current short form", nil, current + ".md"},
+		{"legacy number", []string{"fe-852.md"}, "fe-852.md"},
+		{"hex prefix", []string{"fe-" + id[:4] + ".md"}, "fe-" + id[:4] + ".md"},
+		{"another ticket's number is not a match", []string{"fe-853.md"}, current + ".md"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.RemoveAll(plans); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(plans, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range tt.files {
+				if err := os.WriteFile(filepath.Join(plans, f), nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := DefaultPlanPath(ticket)
+			if err != nil {
+				t.Fatalf("DefaultPlanPath: %v", err)
+			}
+			if want := filepath.Join(plans, tt.want); got != want {
+				t.Errorf("DefaultPlanPath = %q, want %q", got, want)
+			}
+		})
+	}
+}

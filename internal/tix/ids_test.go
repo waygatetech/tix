@@ -1,6 +1,7 @@
 package tix
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -143,21 +144,26 @@ func TestFormatID(t *testing.T) {
 func TestRefMatchesID(t *testing.T) {
 	const id = "a3f9b2c1-0000-4000-8000-000000000000"
 	tests := []struct {
-		name string
-		want bool
+		name   string
+		legacy int
+		want   bool
 	}{
-		{"fe-a3f9", true},
-		{"fe-a3f9b", true},
-		{"fe-" + id, true},
-		{"fe-a3f", false},
-		{"fe-a3f8", false},
-		{"ap-a3f9", false},
-		{"fe-47", false},
+		{"fe-a3f9", 0, true},
+		{"fe-a3f9b", 0, true},
+		{"fe-" + id, 0, true},
+		{"fe-a3f", 0, false},
+		{"fe-a3f8", 0, false},
+		{"ap-a3f9", 0, false},
+		{"fe-47", 0, false},
+		{"fe-47", 47, true},
+		{"fe-470", 47, false},
+		{"ap-47", 47, false},
+		{"fe-a3f9", 47, true},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := refMatchesID(tt.name, "fe", id); got != tt.want {
-				t.Errorf("refMatchesID(%q) = %v, want %v", tt.name, got, tt.want)
+		t.Run(fmt.Sprintf("%s legacy %d", tt.name, tt.legacy), func(t *testing.T) {
+			if got := refMatchesID(tt.name, "fe", id, tt.legacy); got != tt.want {
+				t.Errorf("refMatchesID(%q, legacy %d) = %v, want %v", tt.name, tt.legacy, got, tt.want)
 			}
 		})
 	}
