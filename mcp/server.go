@@ -546,7 +546,7 @@ func noteTool(_ context.Context, _ *mcp.CallToolRequest, args noteArgs) (*mcp.Ca
 	if err := tix.Note(id, args.Body); err != nil {
 		return nil, nil, fmt.Errorf("note failed: %w", err)
 	}
-	return textResult(fmt.Sprintf("noted %s", args.ID)), nil, nil
+	return textResult(fmt.Sprintf("noted %s", id)), nil, nil
 }
 
 type editArgs struct {
@@ -630,8 +630,8 @@ func projectsTool(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.C
 	lines := make([]string, len(projects))
 	for i, project := range projects {
 		// The CLI names each project's id prefix here; this reply leaves it out
-		// because these tools take an integer id, so the prefix is nothing the
-		// caller could pass back.
+		// because the replies name tickets by full UUID, so a caller never needs
+		// the prefix to pass an id back.
 		lines[i] = fmt.Sprintf("%s %s total=%d",
 			project.Project, tix.FormatStatusCounts(project.StatusCounts), project.Total)
 	}

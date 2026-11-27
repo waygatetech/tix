@@ -521,7 +521,7 @@ check "claim takes a prefixed id" '"status":"in_progress"' "$tmp/tix" claim "$(r
 check "claim names the status it refuses" "is in_progress" "$tmp/tix" claim "$claim_first"
 check_status "claim refuses a claimed ticket" 1 "$tmp/tix" claim "$claim_first"
 check_status "claim rejects a mismatched --project" 1 "$tmp/tix" claim "$claim_second" --project zen
-check_status "claim rejects an unknown ticket" 1 "$tmp/tix" claim 99999
+check_status "claim rejects an unknown ticket" 1 "$tmp/tix" claim 99
 check_status "claim exits 4 at capacity" 4 env TIX_MAX_ACTIVE=1 "$tmp/tix" claim "$claim_second"
 check "claim lists what is waiting on review" "first claim" env TIX_MAX_ACTIVE=1 "$tmp/tix" claim "$claim_second"
 check "claim at capacity leaves the ticket open" '"status":"open"' "$tmp/tix" show "$claim_second" --json --compact --fields status
@@ -638,8 +638,8 @@ check_absent "add --dry-run writes no ticket" "would add" "$tmp/tix" list --proj
 check "add --dry-run reports a missing body" "Error: ticket body is required" "$tmp/tix" add --project dryrun "x" --dry-run
 check_status "add --dry-run fails on a missing body" 1 "$tmp/tix" add --project dryrun "x" --dry-run
 check "add --dry-run reports an unknown project" "Error: add failed: unknown project" "$tmp/tix" add --project nosuchproj "x" -b "b" --dry-run
-check_status "add --dry-run fails on an unknown parent" 1 "$tmp/tix" add --project dryrun "x" -b "b" --parent 999999 --dry-run
-check "add --dry-run reports an unknown dependency" "no such ticket: 999999" "$tmp/tix" add --project dryrun "x" -b "b" --depends-on 999999 --dry-run
+check_status "add --dry-run fails on an unknown parent" 1 "$tmp/tix" add --project dryrun "x" -b "b" --parent 99 --dry-run
+check "add --dry-run reports an unknown dependency" "no such ticket: 99 " "$tmp/tix" add --project dryrun "x" -b "b" --depends-on 99 --dry-run
 check "add --dry-run reports an out-of-range priority" "Error: add failed: priority must be between 0 and 5, got 9" "$tmp/tix" add --project dryrun "x" -b "b" -p 9 --dry-run
 check_status "add --dry-run refuses --create" 1 "$tmp/tix" add --project dryrun "x" -b "b" --dry-run --create
 check "add -p 9 errors instead of defaulting" "priority must be between 0 and 5, got 9" "$tmp/tix" add --project dryrun "x" -b "b" -p 9

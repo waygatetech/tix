@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -224,13 +225,28 @@ func TestIDArgumentsTakeStringsOrIntegers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
+	wantIDs := map[string][]string{
+		"tix_add":       {"parent_id", "depends_on_ids"},
+		"tix_add_batch": {"tickets.parent_id", "tickets.depends_on_ids"},
+		"tix_list":      {"parent_id"},
+		"tix_show":      {"id"},
+		"tix_edit":      {"id", "parent_id", "depends_on_ids"},
+		"tix_note":      {"id"},
+		"tix_reorder":   {"ids"},
+	}
 	for _, tool := range tools.Tools {
-		schema, err := json.Marshal(tool.InputSchema)
+		raw, err := json.Marshal(tool.InputSchema)
 		if err != nil {
 			t.Fatalf("marshal %s schema: %v", tool.Name, err)
 		}
-		if strings.Contains(string(schema), `"id"`) && !strings.Contains(string(schema), `"type":["string","integer"]`) {
-			t.Errorf("%s schema = %s, want its id typed [string, integer]", tool.Name, schema)
+		var schema map[string]any
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatalf("decode %s schema: %v", tool.Name, err)
+		}
+		for _, path := range wantIDs[tool.Name] {
+			if got := idType(schema, strings.Split(path, ".")); !reflect.DeepEqual(got, []any{"string", "integer"}) {
+				t.Errorf("%s %s type = %v, want [string integer]", tool.Name, path, got)
+			}
 		}
 	}
 
@@ -262,6 +278,27 @@ func TestIDArgumentsTakeStringsOrIntegers(t *testing.T) {
 	if err == nil && !res.IsError {
 		t.Error("tix_show(true) succeeded, want a rejected id")
 	}
+}
+
+// idType follows path through a decoded schema's properties, stepping into
+// array items, and returns the type of the id it ends on: the items' type for
+// a list of ids.
+func idType(schema map[string]any, path []string) any {
+	node := schema
+	for _, name := range path {
+		if items, ok := node["items"].(map[string]any); ok {
+			node = items
+		}
+		props, _ := node["properties"].(map[string]any)
+		node, _ = props[name].(map[string]any)
+		if node == nil {
+			return nil
+		}
+	}
+	if items, ok := node["items"].(map[string]any); ok {
+		node = items
+	}
+	return node["type"]
 }
 
 // testVersion is deliberately not a plausible release number, so a test that
@@ -646,7 +683,7 @@ func TestNoteToolAppendsAndShowPrintsIt(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"appends a note", noteArgs{ID: "1", Body: "blocked on lease; next: retry"}, "noted 1", false},
+		{"appends a note", noteArgs{ID: "1", Body: "blocked on lease; next: retry"}, "noted " + legacyID(t, 1), false},
 		{"rejects an empty note", noteArgs{ID: "1"}, "", true},
 		{"rejects a missing ticket", noteArgs{ID: "99", Body: "x"}, "", true},
 	}
