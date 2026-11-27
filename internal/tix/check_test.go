@@ -50,8 +50,8 @@ func TestCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	id := int(id64)
-	ref := FormatID("ap", id)
+	id := id64
+	ref := FormatID("ap", id, nil)
 	write("plans/"+ref+".md", "---\nticket: "+ref+"\nnew_concepts: [billing]\npaths: [\"internal/**/*.go\"]\n---\n")
 	if _, err := IndexPlan(context.Background(), id, ""); err != nil {
 		t.Fatalf("IndexPlan: %v", err)
@@ -164,20 +164,26 @@ func gitRepo(t *testing.T, refs ...string) (repo string, run func(dir string, ar
 }
 
 func TestTicketDir(t *testing.T) {
-	repo, _ := gitRepo(t, "ap-1")
-	if err := os.MkdirAll(filepath.Join(repo, worktreesDir, "ap-2"), 0o755); err != nil {
+	const (
+		worked = "a3f9b2c1-0000-4000-8000-000000000001"
+		stray  = "b0b0b2c1-0000-4000-8000-000000000002"
+		none   = "c0c0b2c1-0000-4000-8000-000000000003"
+	)
+	repo, _ := gitRepo(t, "ap-a3f9")
+	if err := os.MkdirAll(filepath.Join(repo, worktreesDir, "ap-b0b0"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
 		name string
 		repo string
-		ref  string
+		id   string
 		want string
 	}{
-		{"git worktree", repo, "ap-1", filepath.Join(repo, worktreesDir, "ap-1")},
-		{"stray directory", repo, "ap-2", repo},
-		{"no worktree", repo, "ap-3", repo},
-		{"not a git repo", t.TempDir(), "ap-1", ""},
+		// The worktree keeps its name after the ticket's short id grows.
+		{"git worktree named by a prefix of the id", repo, worked, filepath.Join(repo, worktreesDir, "ap-a3f9")},
+		{"stray directory", repo, stray, repo},
+		{"no worktree", repo, none, repo},
+		{"not a git repo", t.TempDir(), worked, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -185,7 +191,7 @@ func TestTicketDir(t *testing.T) {
 			if want == "" {
 				want = tt.repo
 			}
-			if got := ticketDir(context.Background(), tt.repo, tt.ref); got != want {
+			if got := ticketDir(context.Background(), tt.repo, "ap", tt.id); got != want {
 				t.Fatalf("ticketDir() = %q, want %q", got, want)
 			}
 		})
@@ -202,8 +208,8 @@ func TestCheckWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	id := int(id64)
-	ref := FormatID("ap", id)
+	id := id64
+	ref := FormatID("ap", id, nil)
 	repo, run := gitRepo(t, ref)
 	if _, err := db.Exec(`UPDATE projects SET repo_path = ? WHERE name = 'app'`, repo); err != nil {
 		t.Fatal(err)

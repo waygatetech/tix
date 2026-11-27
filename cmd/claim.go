@@ -50,7 +50,11 @@ func capacityExit(err error) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "  %s %s\n", tix.FormatID(prefix, t.ID), t.Title)
+		shorts, err := tix.ShortIDMap()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "  %s %s\n", tix.FormatID(prefix, t.ID, shorts), t.Title)
 	}
 	return exitError{code: exitAtCapacity, err: err}
 }
@@ -60,7 +64,11 @@ func printClaimed(ticket tix.Ticket) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s [P%d] %s\n", tix.FormatID(prefix, ticket.ID), ticket.Priority, ticket.Title)
+	shorts, err := tix.ShortIDMap()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s [P%d] %s\n", tix.FormatID(prefix, ticket.ID, shorts), ticket.Priority, ticket.Title)
 	if ticket.Body != "" {
 		fmt.Println(ticket.Body)
 	}

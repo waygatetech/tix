@@ -138,7 +138,20 @@ func DefaultPlanPath(ticket Ticket) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(repo, "plans", FormatID(prefix, ticket.ID)+".md"), nil
+	dir := filepath.Join(repo, "plans")
+	// A plan written before the ticket's short id grew keeps its old name.
+	if existing, err := filepath.Glob(filepath.Join(dir, prefix+"-*.md")); err == nil {
+		for _, path := range existing {
+			if refMatchesID(strings.TrimSuffix(filepath.Base(path), ".md"), prefix, ticket.ID) {
+				return path, nil
+			}
+		}
+	}
+	shorts, err := ShortIDMap()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, FormatID(prefix, ticket.ID, shorts)+".md"), nil
 }
 
 func repoPathFor(project string) (string, error) {
@@ -248,7 +261,7 @@ func nextReview(prev *Review, got Review) *Review {
 // IndexPlan parses the plan at path (or the default path when empty), runs the
 // project's plan hook on it, and replaces the ticket's cached plan. The
 // returned plan's Review is awaiting_review when a human must rule first.
-func IndexPlan(ctx context.Context, id int, path string) (Plan, error) {
+func IndexPlan(ctx context.Context, id string, path string) (Plan, error) {
 	ticket, err := Show(id)
 	if err != nil {
 		return Plan{}, err
@@ -274,16 +287,24 @@ func IndexPlan(ctx context.Context, id int, path string) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	if want := FormatID(prefix, id); plan.Ticket != want {
-		return Plan{}, fmt.Errorf("%s: plan is for ticket %q, not %q", path, plan.Ticket, want)
+	shorts, err := ShortIDMap()
+	if err != nil {
+		return Plan{}, err
+	}
+	// The ticket field is matched as a ref behind the project key, not as a
+	// string: a plan written as ti-47 before UUIDs, or before its short id
+	// grew, still names the ticket.
+	if got, err := ResolveRef(plan.Ticket); err != nil || got != id || !strings.HasPrefix(plan.Ticket, prefix+"-") {
+		return Plan{}, fmt.Errorf("%s: plan is for ticket %q, not %q", path, plan.Ticket, FormatID(prefix, id, shorts))
 	}
 	plan.Path = path
 	if err := validateConcepts(ticket.Project, plan); err != nil {
 		return Plan{}, fmt.Errorf("%s: %w", path, err)
 	}
 	var epic *Plan
+	epicID := ""
 	if plan.Epic != "" {
-		if epic, err = approvedEpic(id, plan.Epic); err != nil {
+		if epicID, epic, err = approvedEpic(id, plan.Epic); err != nil {
 			return Plan{}, fmt.Errorf("%s: %w", path, err)
 		}
 		plan.Epic = epic.Ticket
@@ -318,7 +339,7 @@ func IndexPlan(ctx context.Context, id int, path string) (Plan, error) {
 		return Plan{}, fmt.Errorf("beginning plan transaction: %w", err)
 	}
 	defer tx.Rollback()
-	if err := checkLeases(tx, ticket, prefix, plan); err != nil {
+	if err := checkLeases(tx, ticket, prefix, shorts, epicID, plan); err != nil {
 		return Plan{}, err
 	}
 	if err := storePlan(tx, id, plan); err != nil {
@@ -335,29 +356,29 @@ func IndexPlan(ctx context.Context, id int, path string) (Plan, error) {
 
 // approvedEpic loads the plan a child names as its epic. Only an approved plan
 // counts: its approval is the review the child inherits.
-func approvedEpic(childID int, ref string) (*Plan, error) {
+func approvedEpic(childID string, ref string) (string, *Plan, error) {
 	epicID, err := ResolveRef(ref)
 	if err != nil {
-		return nil, fmt.Errorf("epic %s: %w", ref, err)
+		return "", nil, fmt.Errorf("epic %s: %w", ref, err)
 	}
 	if epicID == childID {
-		return nil, errors.New("a plan cannot name its own ticket as its epic")
+		return "", nil, errors.New("a plan cannot name its own ticket as its epic")
 	}
 	epic, err := Show(epicID)
 	if err != nil {
-		return nil, fmt.Errorf("epic %s: %w", ref, err)
+		return "", nil, fmt.Errorf("epic %s: %w", ref, err)
 	}
 	if epic.Plan == nil || epic.Plan.Review == nil || epic.Plan.Review.State != ReviewApproved {
-		return nil, fmt.Errorf("epic %s has no approved plan; plan and approve it first", ref)
+		return "", nil, fmt.Errorf("epic %s has no approved plan; plan and approve it first", ref)
 	}
-	return epic.Plan, nil
+	return epicID, epic.Plan, nil
 }
 
 // Lease is a concept an in_progress ticket's plan claims within its project.
 type Lease struct {
 	Project  string `json:"project"`
 	Concept  string `json:"concept"`
-	TicketID int    `json:"ticket_id"`
+	TicketID string `json:"ticket_id"`
 }
 
 // Leases are derived from cached plans rather than stored: a ticket holds its
@@ -401,9 +422,9 @@ func queryLeases(q sqlQueryer, project string) ([]Lease, error) {
 // checkLeases fails when another in_progress ticket in the project already
 // leases a concept the plan declares. The plan's own epic is exempt: its
 // leases cover the work the child is carrying out.
-// prefix is the project's, resolved by the caller: the transaction q belongs
-// to holds the only connection.
-func checkLeases(q sqlQueryer, ticket Ticket, prefix string, plan Plan) error {
+// prefix, shorts, and epicID (the plan's resolved epic, or "") are resolved
+// by the caller: the transaction q belongs to holds the only connection.
+func checkLeases(q sqlQueryer, ticket Ticket, prefix string, shorts map[string]string, epicID string, plan Plan) error {
 	wanted := map[string]bool{}
 	for _, concepts := range [][]string{plan.Concepts, plan.NewConcepts} {
 		for _, concept := range concepts {
@@ -418,9 +439,9 @@ func checkLeases(q sqlQueryer, ticket Ticket, prefix string, plan Plan) error {
 		return err
 	}
 	for _, lease := range leases {
-		if lease.TicketID != ticket.ID && wanted[lease.Concept] && FormatID(prefix, lease.TicketID) != plan.Epic {
+		if lease.TicketID != ticket.ID && wanted[lease.Concept] && lease.TicketID != epicID {
 			return fmt.Errorf("concept %q is leased by %s in project %q; wait for it or coordinate",
-				lease.Concept, FormatID(prefix, lease.TicketID), lease.Project)
+				lease.Concept, FormatID(prefix, lease.TicketID, shorts), lease.Project)
 		}
 	}
 	return nil
@@ -429,10 +450,10 @@ func checkLeases(q sqlQueryer, ticket Ticket, prefix string, plan Plan) error {
 // Concept is an entry in the repo's concepts.yaml registry. LeasedBy lists the
 // in_progress tickets whose plans hold it.
 type Concept struct {
-	Name     string `json:"name" yaml:"name"`
-	Owner    string `json:"owner,omitempty" yaml:"owner"`
-	Module   string `json:"module,omitempty" yaml:"module"`
-	LeasedBy []int  `json:"leased_by,omitempty" yaml:"-"`
+	Name     string   `json:"name" yaml:"name"`
+	Owner    string   `json:"owner,omitempty" yaml:"owner"`
+	Module   string   `json:"module,omitempty" yaml:"module"`
+	LeasedBy []string `json:"leased_by,omitempty" yaml:"-"`
 }
 
 // ErrNoRegistry means the project's repo has no concepts.yaml, so concepts go
@@ -551,13 +572,13 @@ func Concepts(project string) ([]Concept, error) {
 // Approve records a human's sign-off on a plan awaiting review. The project's
 // approve hook, if any, runs first with {ticket, plan} on stdin; a non-zero
 // exit leaves the plan awaiting review.
-func Approve(ctx context.Context, id int) (Plan, error) {
+func Approve(ctx context.Context, id string) (Plan, error) {
 	plan, err := planFor(id)
 	if err != nil {
 		return Plan{}, err
 	}
 	if plan == nil || plan.Review == nil || plan.Review.State != ReviewAwaiting {
-		return Plan{}, fmt.Errorf("ticket %d has no plan awaiting review", id)
+		return Plan{}, fmt.Errorf("ticket %s has no plan awaiting review", id)
 	}
 	ticket, err := Show(id)
 	if err != nil {
@@ -604,7 +625,7 @@ func Approve(ctx context.Context, id int) (Plan, error) {
 	return *plan, nil
 }
 
-func storePlan(exec sqlExecer, id int, plan Plan) error {
+func storePlan(exec sqlExecer, id string, plan Plan) error {
 	encoded, err := json.Marshal(plan)
 	if err != nil {
 		return fmt.Errorf("encoding plan: %w", err)
@@ -616,7 +637,7 @@ func storePlan(exec sqlExecer, id int, plan Plan) error {
 }
 
 // planFor returns a ticket's cached plan, or nil when none has been indexed.
-func planFor(id int) (*Plan, error) {
+func planFor(id string) (*Plan, error) {
 	var raw sql.NullString
 	if err := db.QueryRow(`SELECT plan FROM tickets WHERE id = ?`, id).Scan(&raw); err != nil {
 		return nil, fmt.Errorf("loading plan: %w", err)

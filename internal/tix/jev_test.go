@@ -13,14 +13,14 @@ import (
 	"time"
 )
 
-func addJevTestTicket(t *testing.T) int {
+func addJevTestTicket(t *testing.T) string {
 	t.Helper()
 	newProjects(t, "acme")
 	id, err := Add("Add passport stamps", "Choose the stamp behavior", 1, "acme", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return int(id)
+	return id
 }
 
 func jevResponseBody(product, ambiguity, scope float64) string {

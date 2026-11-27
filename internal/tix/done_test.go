@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -35,11 +34,11 @@ func TestRunDoneRecordsAttempts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Add: %v", err)
 			}
-			id := int(id64)
+			id := id64
 			if _, err := ClaimNext("acme"); err != nil {
 				t.Fatalf("ClaimNext: %v", err)
 			}
-			t.Setenv("TICKET", strconv.Itoa(id))
+			t.Setenv("TICKET", id)
 			if tt.hook != "" {
 				if err := os.MkdirAll(filepath.Join(repo, ".tix"), 0o755); err != nil {
 					t.Fatal(err)
@@ -112,8 +111,8 @@ func TestRunDoneInWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	id := int(id64)
-	ref := FormatID("ac", id)
+	id := id64
+	ref := FormatID("ac", id, nil)
 	repo, _ := gitRepo(t, ref)
 	if _, err := db.Exec(`UPDATE projects SET repo_path = ? WHERE name = 'acme'`, repo); err != nil {
 		t.Fatal(err)
@@ -185,8 +184,8 @@ func TestRunDoneFromCwdWorktree(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Add: %v", err)
 			}
-			id := int(id64)
-			ref := FormatID("ac", id)
+			id := id64
+			ref := FormatID("ac", id, nil)
 			run(repo, "worktree", "add", "-q", filepath.Join(worktreesDir, ref), "-b", ref)
 			want := tt.want
 			if want == "ticketBranch" {

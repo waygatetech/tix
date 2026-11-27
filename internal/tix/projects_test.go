@@ -89,10 +89,10 @@ func TestUnknownProjectIsRejectedEverywhere(t *testing.T) {
 			_, err := ClaimNext("backend")
 			return err
 		}(),
-		"Remove": Remove(1, "backend"),
+		"Remove": Remove(nthTicket(t, 1), "backend"),
 		"Edit": func() error {
 			project := "backend"
-			_, err := Edit(1, EditOptions{Project: &project})
+			_, err := Edit(nthTicket(t, 1), EditOptions{Project: &project})
 			return err
 		}(),
 	}
@@ -113,7 +113,7 @@ func TestUnknownProjectIsRejectedEverywhere(t *testing.T) {
 	}
 
 	// The ticket must stay where it was, in the project that does exist.
-	ticket, err := Show(1)
+	ticket, err := Show(nthTicket(t, 1))
 	if err != nil {
 		t.Fatalf("Show(1): %v", err)
 	}
@@ -390,44 +390,10 @@ func TestProjectsIncludesProjectWithoutTickets(t *testing.T) {
 // are backfilled as rows, so the tickets stay reachable and no name that was
 // already in use is suddenly unknown.
 func TestMigrationBackfillsProjectsAndPinnedPrefixes(t *testing.T) {
-	setupTestDB(t)
-
-	if _, err := db.Exec(`DROP TABLE projects`); err != nil {
-		t.Fatalf("drop projects: %v", err)
-	}
-	if _, err := db.Exec(`CREATE TABLE project_prefixes (project TEXT PRIMARY KEY, prefix TEXT NOT NULL UNIQUE)`); err != nil {
-		t.Fatalf("recreate project_prefixes: %v", err)
-	}
-	if _, err := db.Exec(
-		`INSERT INTO tickets (title, body, priority, order_rank, project) VALUES ('legacy', '', 2, 1, 'acme')`,
-	); err != nil {
-		t.Fatalf("insert legacy ticket: %v", err)
-	}
-	if _, err := db.Exec(`INSERT INTO project_prefixes (project, prefix) VALUES ('acme', 'acm'), ('unused', 'un')`); err != nil {
-		t.Fatalf("insert legacy prefixes: %v", err)
-	}
-	// A database that stopped at version 2 predates updated_at, so the column
-	// goes with the version: what is being tested is the backfill running on an
-	// old schema, not on this one with the number changed.
-	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN updated_at`); err != nil {
-		t.Fatalf("drop updated_at: %v", err)
-	}
-	if _, err := db.Exec(`DROP INDEX tickets_parent_id`); err != nil {
-		t.Fatalf("drop parent_id index: %v", err)
-	}
-	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN parent_id`); err != nil {
-		t.Fatalf("drop parent_id: %v", err)
-	}
-	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN plan`); err != nil {
-		t.Fatalf("drop plan: %v", err)
-	}
-	if _, err := db.Exec(`PRAGMA user_version = 2`); err != nil {
-		t.Fatalf("reset user_version: %v", err)
-	}
-
-	if err := migrate(); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	// Version 2 is the schema with project_prefixes and no projects table.
+	seedLegacyDB(t, 2, `
+		INSERT INTO tickets (title, body, priority, order_rank, project) VALUES ('legacy', '', 2, 1, 'acme');
+		INSERT INTO project_prefixes (project, prefix) VALUES ('acme', 'acm'), ('unused', 'un');`)
 
 	projects, err := ListProjects()
 	if err != nil {

@@ -94,6 +94,10 @@ func BuildDashboard() (Dashboard, error) {
 	if err != nil {
 		return Dashboard{}, err
 	}
+	shorts, err := ShortIDMap()
+	if err != nil {
+		return Dashboard{}, err
+	}
 	tickets, err := AllTickets()
 	if err != nil {
 		return Dashboard{}, err
@@ -116,7 +120,7 @@ func BuildDashboard() (Dashboard, error) {
 
 	statuses := map[string]bool{}
 	priorities := map[int]bool{}
-	parentIDs := map[int]bool{}
+	parentIDs := map[string]bool{}
 	for _, ticket := range tickets {
 		if ticket.ParentID != nil {
 			parentIDs[*ticket.ParentID] = true
@@ -139,7 +143,7 @@ func BuildDashboard() (Dashboard, error) {
 		project := &board.Projects[index]
 		project.Tickets = append(project.Tickets, DashboardTicket{
 			Ticket: ticket,
-			Ref:    FormatID(prefixes[ticket.Project], ticket.ID),
+			Ref:    FormatID(prefixes[ticket.Project], ticket.ID, shorts),
 			IsEpic: parentIDs[ticket.ID],
 		})
 		project.StatusCounts[ticket.Status]++
@@ -164,12 +168,12 @@ func BuildDashboard() (Dashboard, error) {
 }
 
 func hierarchyTickets(tickets []DashboardTicket) []DashboardTicket {
-	known := make(map[int]bool, len(tickets))
+	known := make(map[string]bool, len(tickets))
 	for _, ticket := range tickets {
 		known[ticket.ID] = true
 	}
 
-	children := map[int][]DashboardTicket{}
+	children := map[string][]DashboardTicket{}
 	var roots []DashboardTicket
 	for _, ticket := range tickets {
 		if ticket.ParentID != nil && known[*ticket.ParentID] {
@@ -189,7 +193,7 @@ func hierarchyTickets(tickets []DashboardTicket) []DashboardTicket {
 	}
 
 	ordered := make([]DashboardTicket, 0, len(tickets))
-	visited := map[int]bool{}
+	visited := map[string]bool{}
 	var appendTree func(DashboardTicket)
 	appendTree = func(ticket DashboardTicket) {
 		if visited[ticket.ID] {

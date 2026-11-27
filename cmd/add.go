@@ -59,7 +59,7 @@ var addCmd = &cobra.Command{
 			project = resolved
 		}
 
-		var parentID *int
+		var parentID *string
 		if parentRef != "" {
 			id, err := tix.ResolveRef(parentRef)
 			if err != nil {
@@ -88,7 +88,7 @@ var addCmd = &cobra.Command{
 			return fmt.Errorf("add failed: %w", err)
 		}
 		if jsonOutput {
-			ticket, err := tix.Show(int(id))
+			ticket, err := tix.Show(id)
 			if err != nil {
 				return err
 			}
@@ -98,7 +98,11 @@ var addCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s [P%d] %s\n", tix.FormatID(prefix, int(id)), priority, title)
+		shorts, err := tix.ShortIDMap()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s [P%d] %s\n", tix.FormatID(prefix, id, shorts), priority, title)
 		return nil
 	},
 }

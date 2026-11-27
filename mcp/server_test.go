@@ -2,7 +2,11 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +27,58 @@ func setupTestDB(t *testing.T) {
 }
 
 func ptr(i int) *int { return &i }
+
+// numberTickets gives every ticket without one a legacy number equal to its
+// rowid. The tools still take integer ids, which resolve as legacy numbers,
+// so this is what lets a test address tickets it just created as 1, 2, 3.
+func numberTickets(t *testing.T) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", os.Getenv("TIX_DB"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`UPDATE tickets SET legacy_id = rowid WHERE legacy_id IS NULL`); err != nil {
+		t.Fatalf("numbering tickets: %v", err)
+	}
+}
+
+var uuidInText = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// numbered rewrites every ticket UUID in a reply to its legacy number, so
+// expectations can name tickets 1, 2, 3.
+func numbered(t *testing.T, text string) string {
+	t.Helper()
+	return uuidInText.ReplaceAllStringFunc(text, func(id string) string {
+		return strconv.Itoa(legacyNumber(t, id))
+	})
+}
+
+// legacyID is the id of the ticket numbered n.
+func legacyID(t *testing.T, n int) string {
+	t.Helper()
+	id, err := legacyRef(n)
+	if err != nil {
+		t.Fatalf("ticket %d: %v", n, err)
+	}
+	return id
+}
+
+// legacyNumber numbers every ticket and returns id's number.
+func legacyNumber(t *testing.T, id string) int {
+	t.Helper()
+	numberTickets(t)
+	raw, err := sql.Open("sqlite", os.Getenv("TIX_DB"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer raw.Close()
+	var n int
+	if err := raw.QueryRow(`SELECT legacy_id FROM tickets WHERE id = ?`, id).Scan(&n); err != nil {
+		t.Fatalf("legacy number of %s: %v", id, err)
+	}
+	return n
+}
 
 // resultText pulls the reply's single text block out, failing if the reply is
 // shaped any other way: one text block and nothing else is the contract these
@@ -251,7 +307,7 @@ func TestAddBatchCreatesEpicWithChildren(t *testing.T) {
 	parent := tickets[0].ID
 	for _, child := range tickets[1:] {
 		if child.ParentID == nil || *child.ParentID != parent {
-			t.Fatalf("ticket %q parent = %v, want %d", child.Title, child.ParentID, parent)
+			t.Fatalf("ticket %q parent = %v, want %s", child.Title, child.ParentID, parent)
 		}
 	}
 }
@@ -266,7 +322,7 @@ func TestAddBatchWiresDependenciesAndExistingEpics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	epic := int(epicID)
+	epic := legacyNumber(t, epicID)
 
 	_, _, err = addBatchTool(context.Background(), nil, addBatchArgs{
 		Project: "acme",
@@ -279,7 +335,7 @@ func TestAddBatchWiresDependenciesAndExistingEpics(t *testing.T) {
 		t.Fatalf("addBatchTool: %v", err)
 	}
 
-	tickets, err := tix.ListTickets(tix.ListOptions{Project: "acme", ParentID: &epic, ShowAll: true})
+	tickets, err := tix.ListTickets(tix.ListOptions{Project: "acme", ParentID: &epicID, ShowAll: true})
 	if err != nil {
 		t.Fatalf("ListTickets: %v", err)
 	}
@@ -291,7 +347,7 @@ func TestAddBatchWiresDependenciesAndExistingEpics(t *testing.T) {
 		t.Fatalf("Show: %v", err)
 	}
 	if api.Status != "blocked" || len(api.DependsOnIDs) != 1 || api.DependsOnIDs[0] != tickets[0].ID {
-		t.Fatalf("api = status %q depends_on %v, want blocked on %d", api.Status, api.DependsOnIDs, tickets[0].ID)
+		t.Fatalf("api = status %q depends_on %v, want blocked on %s", api.Status, api.DependsOnIDs, tickets[0].ID)
 	}
 }
 
@@ -311,11 +367,11 @@ func TestReorderToolSetsWorkOrder(t *testing.T) {
 		t.Fatalf("ListTickets: %v", err)
 	}
 
-	res, _, err := reorderTool(context.Background(), nil, reorderArgs{IDs: []int{before[1].ID, before[0].ID}})
+	res, _, err := reorderTool(context.Background(), nil, reorderArgs{IDs: []int{legacyNumber(t, before[1].ID), legacyNumber(t, before[0].ID)}})
 	if err != nil {
 		t.Fatalf("reorderTool: %v", err)
 	}
-	if want := fmt.Sprintf("reordered: %d -> %d", before[1].ID, before[0].ID); resultText(t, res) != want {
+	if want := fmt.Sprintf("reordered: %s -> %s", before[1].ID, before[0].ID); resultText(t, res) != want {
 		t.Fatalf("reply = %q, want %q", resultText(t, res), want)
 	}
 
@@ -454,7 +510,7 @@ func TestToolsRenderPlainText(t *testing.T) {
 	}
 	// The id has to be readable back out of the text, because it is the only
 	// copy now and the other tools need it as an argument.
-	if got, want := resultText(t, res), "1 [P1] fix login (acme)"; got != want {
+	if got, want := numbered(t, resultText(t, res)), "1 [P1] fix login (acme)"; got != want {
 		t.Errorf("add reply = %q, want %q", got, want)
 	}
 
@@ -465,10 +521,11 @@ func TestToolsRenderPlainText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("addBatchTool: %v", err)
 	}
-	if got, want := resultText(t, res), "created 1 in acme\n2 [P2] add tests"; got != want {
+	if got, want := numbered(t, resultText(t, res)), "created 1 in acme\n2 [P2] add tests"; got != want {
 		t.Errorf("add_batch reply = %q, want %q", got, want)
 	}
 
+	numberTickets(t)
 	res, _, err = showTool(ctx, nil, showArgs{ID: 1})
 	if err != nil {
 		t.Fatalf("showTool: %v", err)
@@ -476,16 +533,17 @@ func TestToolsRenderPlainText(t *testing.T) {
 	// The detail names the last write as well, so a caller can tell a ticket
 	// someone is working on from one an agent abandoned. It is a clock reading,
 	// so the expectation comes from what was stored.
-	stored, err := tix.Show(1)
+	stored, err := tix.Show(legacyID(t, 1))
 	if err != nil {
 		t.Fatalf("Show(1): %v", err)
 	}
 	want := fmt.Sprintf("1 [P1] fix login (open, acme, updated %s)\nit 500s",
 		stored.UpdatedAt.UTC().Format(time.RFC3339))
-	if got := resultText(t, res); got != want {
+	if got := numbered(t, resultText(t, res)); got != want {
 		t.Errorf("show reply = %q, want %q", got, want)
 	}
 
+	numberTickets(t)
 	done := "done"
 	if _, _, err := editTool(ctx, nil, editArgs{ID: 2, Status: &done}); err != nil {
 		t.Fatalf("editTool: %v", err)
@@ -496,7 +554,7 @@ func TestToolsRenderPlainText(t *testing.T) {
 	}
 	// A closed ticket is marked, so an --all listing does not read as a list of
 	// open work.
-	if got, want := resultText(t, res), "1 [P1] fix login\nx 2 [P2] add tests"; got != want {
+	if got, want := numbered(t, resultText(t, res)), "1 [P1] fix login\nx 2 [P2] add tests"; got != want {
 		t.Errorf("list reply = %q, want %q", got, want)
 	}
 
@@ -504,7 +562,7 @@ func TestToolsRenderPlainText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("projectsTool: %v", err)
 	}
-	if got, want := resultText(t, res), "acme done=1 open=1 total=2"; got != want {
+	if got, want := numbered(t, resultText(t, res)), "acme done=1 open=1 total=2"; got != want {
 		t.Errorf("projects reply = %q, want %q", got, want)
 	}
 }
@@ -517,6 +575,7 @@ func TestNoteToolAppendsAndShowPrintsIt(t *testing.T) {
 		t.Fatalf("addTool: %v", err)
 	}
 
+	numberTickets(t)
 	tests := []struct {
 		name    string
 		args    noteArgs
@@ -615,6 +674,7 @@ func TestListFiltersAndLimits(t *testing.T) {
 			t.Fatalf("addTool(%q): %v", ticket.title, err)
 		}
 	}
+	numberTickets(t)
 	done := "done"
 	if _, _, err := editTool(ctx, nil, editArgs{ID: 2, Status: &done}); err != nil {
 		t.Fatalf("editTool: %v", err)
@@ -656,7 +716,7 @@ func TestListFiltersAndLimits(t *testing.T) {
 			if err != nil {
 				t.Fatalf("listTool: %v", err)
 			}
-			if got := resultText(t, res); got != tc.want {
+			if got := numbered(t, resultText(t, res)); got != tc.want {
 				t.Errorf("list reply = %q, want %q", got, tc.want)
 			}
 		})
@@ -681,6 +741,7 @@ func TestSearchToolFindsTicketsInAnyStatus(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("addBatchTool: %v", err)
 	}
+	numberTickets(t)
 	done := "done"
 	if _, _, err := editTool(ctx, nil, editArgs{ID: 2, Status: &done}); err != nil {
 		t.Fatalf("editTool: %v", err)
@@ -718,7 +779,7 @@ func TestSearchToolFindsTicketsInAnyStatus(t *testing.T) {
 			if err != nil {
 				t.Fatalf("searchTool: %v", err)
 			}
-			if got := resultText(t, res); got != tc.want {
+			if got := numbered(t, resultText(t, res)); got != tc.want {
 				t.Errorf("search reply = %q, want %q", got, tc.want)
 			}
 		})
@@ -734,6 +795,7 @@ func TestToolsRejectBadArguments(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("addTool: %v", err)
 	}
+	numberTickets(t)
 
 	for _, tc := range []struct {
 		name string

@@ -18,7 +18,7 @@ func TestBuildDashboardGroupsEveryProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if _, err := Add("deploy app", "", 1, "acme", nil, int(blocker)); err != nil {
+	if _, err := Add("deploy app", "", 1, "acme", nil, blocker); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	shipped, err := Add("ship docs", "", 2, "acme", nil)
@@ -28,7 +28,7 @@ func TestBuildDashboardGroupsEveryProject(t *testing.T) {
 	if _, err := Add("tune cache", "", 1, "zen", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := Done(int(shipped)); err != nil {
+	if err := Done(shipped); err != nil {
 		t.Fatalf("Done: %v", err)
 	}
 
@@ -63,8 +63,8 @@ func TestBuildDashboardGroupsEveryProject(t *testing.T) {
 		t.Fatalf("acme tickets = %d, want 4", len(acme.Tickets))
 	}
 	dependent := acme.Tickets[2]
-	if dependent.Title != "deploy app" || !reflect.DeepEqual(dependent.DependsOnIDs, []int{int(blocker)}) || !reflect.DeepEqual(dependent.BlockedByIDs, []int{int(blocker)}) {
-		t.Fatalf("dependent ticket = %+v, want hydrated dependency on %d", dependent, blocker)
+	if dependent.Title != "deploy app" || !reflect.DeepEqual(dependent.DependsOnIDs, []string{blocker}) || !reflect.DeepEqual(dependent.BlockedByIDs, []string{blocker}) {
+		t.Fatalf("dependent ticket = %+v, want hydrated dependency on %s", dependent, blocker)
 	}
 }
 
@@ -87,7 +87,10 @@ func TestBuildDashboardUsesPrefixedRefs(t *testing.T) {
 		t.Fatalf("BuildDashboard: %v", err)
 	}
 
-	want := FormatID("ac", int(id))
+	want, err := RefFor("acme", id)
+	if err != nil {
+		t.Fatalf("RefFor: %v", err)
+	}
 	if got := board.Projects[0].Tickets[0].Ref; got != want {
 		t.Fatalf("Ref = %q, want %q", got, want)
 	}
@@ -104,7 +107,7 @@ func TestBuildDashboardIdentifiesEpics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add epic: %v", err)
 	}
-	epic := int(epicID)
+	epic := epicID
 	if _, err := Add("unrelated", "", 1, "acme", nil); err != nil {
 		t.Fatalf("Add unrelated: %v", err)
 	}
@@ -170,7 +173,7 @@ func TestBuildDashboardSinksDoneTickets(t *testing.T) {
 	if _, err := Add("also open", "", 2, "acme", nil); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := Done(int(first)); err != nil {
+	if err := Done(first); err != nil {
 		t.Fatalf("Done: %v", err)
 	}
 

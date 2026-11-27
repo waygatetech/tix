@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -66,7 +65,7 @@ func headCommit(ctx context.Context, repo string) *doneCommit {
 // hook records a failed done_attempt and leaves the ticket open; a passing one,
 // or no hook, records a pass and closes it, with that checkout's HEAD on the
 // done event.
-func RunDone(ctx context.Context, id int, cwd string) error {
+func RunDone(ctx context.Context, id string, cwd string) error {
 	ticket, err := Show(id)
 	if err != nil {
 		return err
@@ -86,13 +85,13 @@ func RunDone(ctx context.Context, id int, cwd string) error {
 	if wt := linkedWorktree(ctx, repo, cwd); wt != "" {
 		repo = wt
 	} else {
-		repo = ticketDir(ctx, repo, FormatID(prefix, id))
+		repo = ticketDir(ctx, repo, prefix, id)
 	}
 	attempt := doneAttempt{Result: "pass"}
 	if hook == "" {
 		return closeTicket(id, &attempt, headCommit(ctx, repo))
 	}
-	cmd := exec.CommandContext(ctx, hook, strconv.Itoa(id))
+	cmd := exec.CommandContext(ctx, hook, id)
 	cmd.Dir = repo
 	cmd.Stderr = os.Stderr
 	out, runErr := cmd.Output()

@@ -572,7 +572,7 @@
       fetch("/api/tickets/" + childID, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ parent_id: parseInt(row.dataset.id, 10) })
+        body: JSON.stringify({ parent_id: row.dataset.id })
       }).then(function (res) {
         if (!res.ok) return apiError(res);
         location.reload();

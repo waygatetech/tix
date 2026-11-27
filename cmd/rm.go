@@ -30,14 +30,15 @@ var rmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := tix.Remove(id, project); err != nil {
-			return fmt.Errorf("error removing ticket: %w", err)
-		}
-		prefix, err := tix.PrefixFor(project)
+		// The short form is computed first: once the ticket is gone it has none.
+		label, err := tix.RefFor(project, id)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s removed %s\n", tix.FormatID(prefix, id), ticketContext(ticket))
+		if err := tix.Remove(id, project); err != nil {
+			return fmt.Errorf("error removing ticket: %w", err)
+		}
+		fmt.Printf("%s removed %s\n", label, ticketContext(ticket))
 		return nil
 	},
 }

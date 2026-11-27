@@ -82,73 +82,12 @@ func TestOverrideWinsAndReservesPrefix(t *testing.T) {
 	}
 }
 
-func TestParseRefAcceptsBothForms(t *testing.T) {
-	cases := []struct {
-		ref    string
-		id     int
-		prefix string
-	}{
-		{"47", 47, ""},
-		{"fe-47", 47, "fe"},
-		{"#47", 47, ""},
-		{" 47 ", 47, ""},
-		{"fe2-47", 47, "fe2"},
-	}
-	for _, c := range cases {
-		id, prefix, err := ParseRef(c.ref)
-		if err != nil {
-			t.Errorf("ParseRef(%q): %v", c.ref, err)
-			continue
-		}
-		if id != c.id || prefix != c.prefix {
-			t.Errorf("ParseRef(%q) = (%d, %q), want (%d, %q)", c.ref, id, prefix, c.id, c.prefix)
-		}
-	}
-
-	for _, ref := range []string{"", "abc", "-47", "fe-", "0", "-1", "fe-abc"} {
-		if _, _, err := ParseRef(ref); err == nil {
-			t.Errorf("ParseRef(%q) succeeded, want error", ref)
-		}
-	}
-}
-
-func TestResolveRefRejectsWrongProjectPrefix(t *testing.T) {
-	setupTestDB(t)
-	newProjects(t, "acme")
-
-	acmeID, err := Add("fix login bug", "", 2, "acme", nil)
-	if err != nil {
-		t.Fatalf("Add acme ticket: %v", err)
-	}
-
-	// The bare id still works, which is what keeps existing shell history and
-	// scripts valid.
-	if got, err := ResolveRef("1"); err != nil || got != int(acmeID) {
-		t.Fatalf("ResolveRef(1) = (%d, %v), want (%d, nil)", got, err, acmeID)
-	}
-
-	// The right prefix resolves.
-	if got, err := ResolveRef("ac-1"); err != nil || got != int(acmeID) {
-		t.Fatalf("ResolveRef(ac-1) = (%d, %v), want (%d, nil)", got, err, acmeID)
-	}
-
-	// A prefix naming a different project is the case prefixes exist to catch.
-	if _, err := ResolveRef("ze-1"); err == nil {
-		t.Fatal("ResolveRef(ze-1) succeeded, want a project mismatch error")
-	} else if !strings.Contains(err.Error(), "acme") {
-		t.Errorf("error %q does not name the actual project", err)
-	}
-
-	if _, err := ResolveRef("ac-99"); err == nil {
-		t.Error("ResolveRef(ac-99) succeeded, want no-such-ticket error")
-	}
-}
-
 func TestSetPrefixOverridesAndRejectsDuplicates(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme", "zen")
 
-	if _, err := Add("fix login bug", "", 2, "acme", nil); err != nil {
+	acmeID, err := Add("fix login bug", "", 2, "acme", nil)
+	if err != nil {
 		t.Fatalf("Add acme ticket: %v", err)
 	}
 	if _, err := Add("refactor parser", "", 2, "zen", nil); err != nil {
@@ -161,8 +100,8 @@ func TestSetPrefixOverridesAndRejectsDuplicates(t *testing.T) {
 	if got, err := PrefixFor("acme"); err != nil || got != "acm" {
 		t.Fatalf("PrefixFor(acme) = (%q, %v), want (acm, nil)", got, err)
 	}
-	if _, err := ResolveRef("acm-1"); err != nil {
-		t.Errorf("ResolveRef(acm-1) after override: %v", err)
+	if got, err := ResolveRef("acm-" + acmeID[:8]); err != nil || got != acmeID {
+		t.Errorf("ResolveRef(acm-%s) after override = (%q, %v), want %q", acmeID[:8], got, err, acmeID)
 	}
 
 	// Re-pinning the same project is an update, not a conflict.
@@ -181,11 +120,46 @@ func TestSetPrefixOverridesAndRejectsDuplicates(t *testing.T) {
 }
 
 func TestFormatID(t *testing.T) {
-	if got := FormatID("fe", 47); got != "fe-47" {
-		t.Errorf("FormatID(fe, 47) = %q, want fe-47", got)
+	const id = "a3f9b2c1-0000-4000-8000-000000000000"
+	shorts := map[string]string{id: "a3f9"}
+	tests := []struct {
+		name, prefix string
+		shorts       map[string]string
+		want         string
+	}{
+		{"short form", "fe", shorts, "fe-a3f9"},
+		{"no prefix", "", shorts, "a3f9"},
+		{"missing short falls back to the full id", "fe", nil, "fe-" + id},
 	}
-	if got := FormatID("", 47); got != "47" {
-		t.Errorf("FormatID(\"\", 47) = %q, want 47", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FormatID(tt.prefix, id, tt.shorts); got != tt.want {
+				t.Errorf("FormatID = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRefMatchesID(t *testing.T) {
+	const id = "a3f9b2c1-0000-4000-8000-000000000000"
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"fe-a3f9", true},
+		{"fe-a3f9b", true},
+		{"fe-" + id, true},
+		{"fe-a3f", false},
+		{"fe-a3f8", false},
+		{"ap-a3f9", false},
+		{"fe-47", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := refMatchesID(tt.name, "fe", id); got != tt.want {
+				t.Errorf("refMatchesID(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -234,7 +208,7 @@ func TestShortIDs(t *testing.T) {
 	}
 }
 
-func TestResolveUUIDRef(t *testing.T) {
+func TestResolveRef(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 	for _, title := range []string{"alpha", "beta", "legacy", "digits"} {
@@ -242,10 +216,6 @@ func TestResolveUUIDRef(t *testing.T) {
 			t.Fatalf("Add %s: %v", title, err)
 		}
 	}
-	if _, err := db.Exec(uuidMigration); err != nil {
-		t.Fatalf("uuidMigration: %v", err)
-	}
-
 	const (
 		alpha  = "a3f90000-0000-4000-8000-000000000001"
 		beta   = "a3f91111-0000-4000-8000-000000000002"
@@ -296,10 +266,10 @@ func TestResolveUUIDRef(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.ref, func(t *testing.T) {
-			got, err := resolveUUIDRef(tt.ref)
+			got, err := ResolveRef(tt.ref)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("resolveUUIDRef(%q) = %q, want error", tt.ref, got)
+					t.Fatalf("ResolveRef(%q) = %q, want error", tt.ref, got)
 				}
 				for _, s := range tt.errHas {
 					if !strings.Contains(err.Error(), s) {
@@ -309,7 +279,7 @@ func TestResolveUUIDRef(t *testing.T) {
 				return
 			}
 			if err != nil || got != tt.want {
-				t.Errorf("resolveUUIDRef(%q) = (%q, %v), want %q", tt.ref, got, err, tt.want)
+				t.Errorf("ResolveRef(%q) = (%q, %v), want %q", tt.ref, got, err, tt.want)
 			}
 		})
 	}

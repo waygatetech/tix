@@ -17,7 +17,11 @@ var reorderCmd = &cobra.Command{
 			return fmt.Errorf("usage: tix reorder [id...]")
 		}
 
-		ids := make([]int, len(args))
+		shorts, err := tix.ShortIDMap()
+		if err != nil {
+			return err
+		}
+		ids := make([]string, len(args))
 		labels := make([]string, len(args))
 		for i, arg := range args {
 			id, err := tix.ResolveRef(arg)
@@ -36,7 +40,7 @@ var reorderCmd = &cobra.Command{
 				return err
 			}
 			ids[i] = id
-			labels[i] = tix.FormatID(prefix, id)
+			labels[i] = tix.FormatID(prefix, id, shorts)
 		}
 
 		if err := tix.Reorder(ids); err != nil {

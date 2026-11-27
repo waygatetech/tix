@@ -33,8 +33,12 @@ Each newly recorded revert is printed.`,
 		if err != nil {
 			return err
 		}
+		shorts, err := tix.ShortIDMap()
+		if err != nil {
+			return err
+		}
 		for _, r := range reverts {
-			fmt.Printf("%s reverted: %s by %s\n", tix.FormatID(prefixes[r.Project], r.TicketID), shortSHA(r.SHA), shortSHA(r.RevertSHA))
+			fmt.Printf("%s reverted: %s by %s\n", tix.FormatID(prefixes[r.Project], r.TicketID, shorts), shortSHA(r.SHA), shortSHA(r.RevertSHA))
 		}
 		return nil
 	},

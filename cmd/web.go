@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -239,11 +238,11 @@ func webAPIHandler(w http.ResponseWriter, r *http.Request) {
 // webNewTicketRequest is the body of a create request. Priority and body are
 // optional the same way `tix add` treats them.
 type webNewTicketRequest struct {
-	Title    string `json:"title"`
-	Body     string `json:"body"`
-	Priority int    `json:"priority"`
-	Project  string `json:"project"`
-	ParentID *int   `json:"parent_id,omitempty"`
+	Title    string  `json:"title"`
+	Body     string  `json:"body"`
+	Priority int     `json:"priority"`
+	Project  string  `json:"project"`
+	ParentID *string `json:"parent_id,omitempty"`
 }
 
 // webCreateTicketHandler backs the dashboard's "new ticket" form with the same
@@ -270,7 +269,7 @@ func webCreateTicketHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	ticket, err := tix.Show(int(id))
+	ticket, err := tix.Show(id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -290,15 +289,15 @@ type webEditTicketRequest struct {
 	Status      *string `json:"status"`
 	Priority    *int    `json:"priority"`
 	Project     *string `json:"project"`
-	ParentID    *int    `json:"parent_id"`
+	ParentID    *string `json:"parent_id"`
 	ClearParent bool    `json:"clear_parent"`
 }
 
 // webEditTicketHandler backs inline edits made from an expanded ticket row.
 func webEditTicketHandler(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
+	id, err := tix.ResolveRef(r.PathValue("id"))
 	if err != nil {
-		http.Error(w, "invalid ticket id", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

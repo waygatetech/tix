@@ -37,7 +37,7 @@ again. The reason is recorded as a reopen event.`,
 	},
 }
 
-func reviewOutcome(ref, verb string, apply func(int, string) error) error {
+func reviewOutcome(ref, verb string, apply func(string, string) error) error {
 	id, err := tix.ResolveRef(ref)
 	if err != nil {
 		return err

@@ -300,33 +300,10 @@ func TestClaimNextQueryUsesTheCoveringIndex(t *testing.T) {
 // has the tickets table and its rows. Migrating it must bring the version
 // forward without disturbing what is there.
 func TestMigrateUpgradesPreMigrationDatabase(t *testing.T) {
-	setupTestDB(t)
-	newProjects(t, "acme")
-
-	if _, err := Add("existing ticket", "", 2, "acme", nil); err != nil {
-		t.Fatalf("Add: %v", err)
-	}
-	// A genuinely pre-migration database predates every column the migrations
-	// added, so the simulation drops updated_at along with the version; leaving
-	// it in place would test a state no real database is ever in.
-	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN updated_at`); err != nil {
-		t.Fatalf("drop updated_at: %v", err)
-	}
-	if _, err := db.Exec(`DROP INDEX tickets_parent_id`); err != nil {
-		t.Fatalf("drop parent_id index: %v", err)
-	}
-	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN parent_id`); err != nil {
-		t.Fatalf("drop parent_id: %v", err)
-	}
-	if _, err := db.Exec(`ALTER TABLE tickets DROP COLUMN plan`); err != nil {
-		t.Fatalf("drop plan: %v", err)
-	}
-	if _, err := db.Exec(`ALTER TABLE projects DROP COLUMN max_active`); err != nil {
-		t.Fatalf("drop max_active: %v", err)
-	}
-	if _, err := db.Exec(`PRAGMA user_version = 0`); err != nil {
-		t.Fatalf("reset user_version: %v", err)
-	}
+	seedLegacyDB(t, 1, `
+		INSERT INTO tickets (title, project, created_at)
+			VALUES ('existing ticket', 'acme', '2026-01-01 00:00:00');
+		PRAGMA user_version = 0;`)
 
 	if err := migrate(); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -346,13 +323,56 @@ func TestMigrateUpgradesPreMigrationDatabase(t *testing.T) {
 	// The backfill reads created_at, not the clock, so a ticket that has sat
 	// untouched for a month is stale the moment the column exists rather than
 	// looking like it was worked on during the migration.
-	ticket, err := Show(1)
+	id, err := ResolveRef("1")
 	if err != nil {
-		t.Fatalf("Show(1) after migrating: %v", err)
+		t.Fatalf("ResolveRef(1) after migrating: %v", err)
+	}
+	ticket, err := Show(id)
+	if err != nil {
+		t.Fatalf("Show(%s) after migrating: %v", id, err)
 	}
 	if ticket.UpdatedAt.IsZero() || !ticket.UpdatedAt.Equal(ticket.CreatedAt) {
 		t.Errorf("backfilled updated_at = %v, want created_at %v", ticket.UpdatedAt, ticket.CreatedAt)
 	}
+}
+
+// seedLegacyDB builds a database at schema version n, runs seed against it,
+// and opens it with InitDB, which applies every later migration.
+func seedLegacyDB(t *testing.T, n int, seed string) {
+	t.Helper()
+	t.Setenv("TIX_JEV_MODE", "off")
+	if db != nil {
+		_ = db.Close()
+	}
+	path := filepath.Join(t.TempDir(), "tix.db")
+	t.Setenv("TIX_DB", path)
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	for i, m := range migrations[:n] {
+		if _, err := raw.Exec(m); err != nil {
+			t.Fatalf("migration %d: %v", i+1, err)
+		}
+	}
+	if _, err := raw.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, n)); err != nil {
+		t.Fatalf("set user_version: %v", err)
+	}
+	if _, err := raw.Exec(seed); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := InitDB(); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+			db = nil
+		}
+	})
 }
 
 // Running an older binary against a newer database must fail loudly rather
@@ -452,7 +472,7 @@ func TestClaimNextConcurrentlyClaimsEachTicketOnce(t *testing.T) {
 
 	var (
 		mu     sync.Mutex
-		seen   = map[int]bool{}
+		seen   = map[string]bool{}
 		errs   []error
 		wg     sync.WaitGroup
 		start  = make(chan struct{})
@@ -472,7 +492,7 @@ func TestClaimNextConcurrentlyClaimsEachTicketOnce(t *testing.T) {
 			}
 			if seen[ticket.ID] {
 				errs = append(errs, sql.ErrNoRows)
-				t.Errorf("ticket %d claimed twice", ticket.ID)
+				t.Errorf("ticket %s claimed twice", ticket.ID)
 				return
 			}
 			seen[ticket.ID] = true
@@ -495,51 +515,27 @@ var uuidV4 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-
 // database seeded at the current schema must come out with each link pointing
 // at the same ticket it did before, just by UUID.
 func TestUUIDMigrationRewritesTicketReferences(t *testing.T) {
-	setupTestDB(t)
-	newProjects(t, "acme")
-
-	epic, err := Add("epic", "", 2, "acme", nil)
-	if err != nil {
-		t.Fatalf("Add epic: %v", err)
-	}
-	epicID := int(epic)
-	child, err := Add("child", "", 2, "acme", &epicID)
-	if err != nil {
-		t.Fatalf("Add child: %v", err)
-	}
-	blocked, err := Add("blocked", "", 2, "acme", nil, int(child))
-	if err != nil {
-		t.Fatalf("Add blocked: %v", err)
-	}
-	removed, err := Add("removed", "", 2, "acme", nil)
-	if err != nil {
-		t.Fatalf("Add removed: %v", err)
-	}
-	// Closing the epic's only child closes the epic with closed_by = child.
-	if err := Done(int(child)); err != nil {
-		t.Fatalf("Done child: %v", err)
-	}
-	if err := recordJevEvaluation(int(blocked), JevEvaluation{PolicyDecision: "allow", Mode: "off"}); err != nil {
-		t.Fatalf("recordJevEvaluation: %v", err)
-	}
-	if _, err := Claim(int(removed)); err != nil {
-		t.Fatalf("Claim removed: %v", err)
-	}
-	if err := Remove(int(removed), "acme"); err != nil {
-		t.Fatalf("Remove: %v", err)
-	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-	if _, err := tx.Exec(uuidMigration); err != nil {
-		_ = tx.Rollback()
-		t.Fatalf("uuidMigration: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit: %v", err)
-	}
+	// Seeded at the last integer-id schema: the epic was closed by its only
+	// child, blocked depends on child, and ticket 4 was removed but left a
+	// claim event behind.
+	const (
+		epic    int64 = 1
+		child   int64 = 2
+		blocked int64 = 3
+	)
+	seedLegacyDB(t, len(migrations)-1, `
+		INSERT INTO projects (name) VALUES ('acme');
+		INSERT INTO tickets (id, title, status, project, parent_id) VALUES
+			(1, 'epic', 'done', 'acme', NULL),
+			(2, 'child', 'done', 'acme', 1),
+			(3, 'blocked', 'open', 'acme', NULL);
+		INSERT INTO ticket_dependencies (ticket_id, depends_on_id) VALUES (3, 2);
+		INSERT INTO ticket_events (ticket_id, event, data) VALUES
+			(4, 'claim', '{"status":"in_progress"}'),
+			(2, 'done', NULL),
+			(1, 'done', '{"closed_by":2}');
+		INSERT INTO jev_evaluations (ticket_id, policy_decision, latency_ms, mode, status)
+			VALUES (3, 'allow', 0, 'off', 'ok');`)
 
 	ids := map[int64]string{}
 	rows, err := db.Query(`SELECT id, legacy_id FROM tickets`)
@@ -631,16 +627,16 @@ func TestDependenciesOrderByCreatedAt(t *testing.T) {
 	if _, err := db.Exec(`UPDATE tickets SET created_at = '2020-01-01 00:00:00' WHERE id = ?`, second); err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
-	blocked, err := Add("blocked", "", 2, "acme", nil, int(first), int(second))
+	blocked, err := Add("blocked", "", 2, "acme", nil, first, second)
 	if err != nil {
 		t.Fatalf("Add blocked: %v", err)
 	}
 
-	deps, _, err := dependenciesFor(int(blocked))
+	deps, _, err := dependenciesFor(blocked)
 	if err != nil {
 		t.Fatalf("dependenciesFor: %v", err)
 	}
-	if len(deps) != 2 || deps[0] != int(second) || deps[1] != int(first) {
-		t.Errorf("dependencies = %v, want [%d %d] (created_at order)", deps, second, first)
+	if len(deps) != 2 || deps[0] != second || deps[1] != first {
+		t.Errorf("dependencies = %v, want [%s %s] (created_at order)", deps, second, first)
 	}
 }

@@ -18,7 +18,7 @@ type Event struct {
 
 // recordEvent appends a lifecycle event. Callers pass their transaction so the
 // event commits or rolls back with the transition it describes.
-func recordEvent(exec sqlExecer, id int, event string, data any) error {
+func recordEvent(exec sqlExecer, id string, event string, data any) error {
 	var encoded any
 	if data != nil {
 		b, err := json.Marshal(data)
@@ -35,7 +35,7 @@ func recordEvent(exec sqlExecer, id int, event string, data any) error {
 
 // Note appends a free-form handoff note to a ticket's history. It changes
 // nothing else: a note records context, not a transition.
-func Note(id int, body string) error {
+func Note(id string, body string) error {
 	if strings.TrimSpace(body) == "" {
 		return errors.New("a note body is required")
 	}
@@ -52,7 +52,7 @@ type NoteEntry struct {
 }
 
 // Notes returns a ticket's notes, oldest first.
-func Notes(id int) ([]NoteEntry, error) {
+func Notes(id string) ([]NoteEntry, error) {
 	events, err := Events(id)
 	if err != nil {
 		return nil, err
@@ -74,7 +74,7 @@ func Notes(id int) ([]NoteEntry, error) {
 }
 
 // Events returns a ticket's history, oldest first.
-func Events(id int) ([]Event, error) {
+func Events(id string) ([]Event, error) {
 	rows, err := db.Query(`SELECT event, at, data FROM ticket_events WHERE ticket_id = ? ORDER BY id`, id)
 	if err != nil {
 		return nil, fmt.Errorf("loading events: %w", err)

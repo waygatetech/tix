@@ -57,8 +57,12 @@ var showCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		shorts, err := tix.ShortIDMap()
+		if err != nil {
+			return err
+		}
 		fmt.Printf("%s [P%d] %s (%s, %s)\n",
-			tix.FormatID(prefix, ticket.ID), ticket.Priority, ticket.Title, ticket.Status, ticket.Project)
+			tix.FormatID(prefix, ticket.ID, shorts), ticket.Priority, ticket.Title, ticket.Status, ticket.Project)
 		// Timestamps print here and nowhere else in the plain output: a listing
 		// is read a screen at a time, and this is the view with room for them.
 		fmt.Printf("created %s, updated %s (idle %s)\n",
@@ -69,7 +73,7 @@ var showCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			fmt.Printf("parent: %s %s\n", tix.FormatID(prefix, parent.ID), parent.Title)
+			fmt.Printf("parent: %s %s\n", tix.FormatID(prefix, parent.ID, shorts), parent.Title)
 		}
 		if len(ticket.DependsOnIDs) > 0 {
 			fmt.Println("depends on:")
@@ -82,7 +86,7 @@ var showCmd = &cobra.Command{
 				if dep.Status == "done" {
 					marker = "x "
 				}
-				fmt.Printf("  %s%s [P%d] %s\n", marker, tix.FormatID(prefix, dep.ID), dep.Priority, dep.Title)
+				fmt.Printf("  %s%s [P%d] %s\n", marker, tix.FormatID(prefix, dep.ID, shorts), dep.Priority, dep.Title)
 			}
 		}
 		if plan := ticket.Plan; plan != nil {
@@ -122,7 +126,7 @@ var showCmd = &cobra.Command{
 				if child.Status == "done" {
 					marker = "x "
 				}
-				fmt.Printf("  %s%s [P%d] %s\n", marker, tix.FormatID(prefix, child.ID), child.Priority, child.Title)
+				fmt.Printf("  %s%s [P%d] %s\n", marker, tix.FormatID(prefix, child.ID, shorts), child.Priority, child.Title)
 			}
 		}
 		return nil

@@ -143,7 +143,7 @@ func threshold(name string) (float64, error) {
 	return n, nil
 }
 
-func evaluateJev(ctx context.Context, cfg jevConfig, ticket Ticket, prefix string) (evaluation JevEvaluation) {
+func evaluateJev(ctx context.Context, cfg jevConfig, ticket Ticket, ref string) (evaluation JevEvaluation) {
 	evaluation = JevEvaluation{Mode: cfg.Mode, PolicyDecision: "claim"}
 	started := time.Now()
 	defer func() { evaluation.Latency = time.Since(started) }()
@@ -155,7 +155,7 @@ func evaluateJev(ctx context.Context, cfg jevConfig, ticket Ticket, prefix strin
 	}
 
 	var state jevState
-	state.Ticket.ID = FormatID(prefix, ticket.ID)
+	state.Ticket.ID = ref
 	state.Ticket.Title = ticket.Title
 	state.Ticket.Body = ticket.Body
 	state.Project.Constraints = []string{}
@@ -218,7 +218,7 @@ func requiresHumanInput(got, thresholds JevJudgments) bool {
 		got.ScopeRisk >= thresholds.ScopeRisk
 }
 
-func recordJevEvaluation(ticketID int, e JevEvaluation) error {
+func recordJevEvaluation(ticketID string, e JevEvaluation) error {
 	status := "ok"
 	errText := ""
 	var product, ambiguity, scope any = e.Judgments.ProductDecisionRequired, e.Judgments.RequirementsAmbiguous, e.Judgments.ScopeRisk

@@ -10,10 +10,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type Ticket struct {
-	ID       int    `json:"id,omitzero"`
+	ID       string `json:"id,omitempty"`
 	Title    string `json:"title"`
 	Body     string `json:"body,omitempty"`
 	Status   string `json:"status"`
@@ -25,11 +27,11 @@ type Ticket struct {
 	Order int `json:"-"`
 	// ParentID groups this ticket under an epic: the id of another ticket in
 	// the same project, or nil when this ticket has no parent.
-	ParentID *int `json:"parent_id,omitempty"`
+	ParentID *string `json:"parent_id,omitempty"`
 	// DependsOnIDs are tickets that must be done before this ticket is ready.
-	DependsOnIDs []int `json:"depends_on,omitempty"`
+	DependsOnIDs []string `json:"depends_on,omitempty"`
 	// BlockedByIDs is the unfinished subset of DependsOnIDs.
-	BlockedByIDs []int `json:"blocked_by,omitempty"`
+	BlockedByIDs []string `json:"blocked_by,omitempty"`
 	// Plan is the cached frontmatter of the ticket's repo plan, loaded by Show
 	// only; nil when no plan has been indexed.
 	Plan *Plan `json:"plan,omitempty"`
@@ -54,7 +56,7 @@ const ticketColumns = `id, title, body, status, priority, order_rank, project, p
 // than a row type so both *sql.Row and *sql.Rows can be handed to it.
 func scanTicket(scan func(...any) error) (Ticket, error) {
 	var ticket Ticket
-	var parentID sql.NullInt64
+	var parentID sql.NullString
 	var updatedAt sql.NullTime
 	err := scan(&ticket.ID, &ticket.Title, &ticket.Body, &ticket.Status,
 		&ticket.Priority, &ticket.Order, &ticket.Project, &parentID, &ticket.CreatedAt, &updatedAt)
@@ -62,8 +64,7 @@ func scanTicket(scan func(...any) error) (Ticket, error) {
 		return ticket, err
 	}
 	if parentID.Valid {
-		id := int(parentID.Int64)
-		ticket.ParentID = &id
+		ticket.ParentID = &parentID.String
 	}
 	// updated_at was added after created_at and remains nullable in SQLite.
 	// Treat a NULL left by a legacy or direct insert as an untouched ticket.
@@ -96,7 +97,7 @@ type ListOptions struct {
 	Limit    int
 	// ParentID, when set, keeps only tickets grouped under this parent
 	// ticket (its children), instead of every ticket in the project.
-	ParentID *int
+	ParentID *string
 	// Concepts, when set, keeps only tickets whose cached plan declares any
 	// of them in concepts or new_concepts.
 	Concepts []string
@@ -104,7 +105,7 @@ type ListOptions struct {
 
 // NewTicket runs every check Add runs and returns the ticket Add would insert,
 // without writing anything. It has no id or timestamps yet.
-func NewTicket(title, body string, priority int, project string, parentID *int, dependsOnIDs ...int) (Ticket, error) {
+func NewTicket(title, body string, priority int, project string, parentID *string, dependsOnIDs ...string) (Ticket, error) {
 	if priority < 0 || priority > 5 {
 		return Ticket{}, violation("priority-range", "priority must be between 0 and 5, got %d", priority)
 	}
@@ -117,7 +118,7 @@ func NewTicket(title, body string, priority int, project string, parentID *int, 
 			return Ticket{}, err
 		}
 	}
-	if err := checkDependencies(0, project, dependsOnIDs); err != nil {
+	if err := checkDependencies("", project, dependsOnIDs); err != nil {
 		return Ticket{}, err
 	}
 	status := "open"
@@ -137,10 +138,10 @@ func NewTicket(title, body string, priority int, project string, parentID *int, 
 	}, nil
 }
 
-func Add(title, body string, priority int, project string, parentID *int, dependsOnIDs ...int) (int64, error) {
+func Add(title, body string, priority int, project string, parentID *string, dependsOnIDs ...string) (string, error) {
 	ticket, err := NewTicket(title, body, priority, project, parentID, dependsOnIDs...)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 	status, project := ticket.Status, ticket.Project
 
@@ -149,24 +150,23 @@ func Add(title, body string, priority int, project string, parentID *int, depend
 
 	tx, err := db.Begin()
 	if err != nil {
-		return 0, err
+		return "", fmt.Errorf("beginning add transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	res, err := tx.Exec(
-		`INSERT INTO tickets (title, body, status, priority, order_rank, project, parent_id, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-		title, body, status, priority, maxRank+1, project, nullableInt(parentID),
-	)
-	if err != nil {
-		return 0, err
+	id := uuid.NewString()
+	if _, err := tx.Exec(
+		`INSERT INTO tickets (id, title, body, status, priority, order_rank, project, parent_id, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		id, title, body, status, priority, maxRank+1, project, nullableString(parentID),
+	); err != nil {
+		return "", fmt.Errorf("inserting ticket: %w", err)
 	}
-	id, _ := res.LastInsertId()
-	if err := replaceDependencies(tx, int(id), dependsOnIDs); err != nil {
-		return 0, err
+	if err := replaceDependencies(tx, id, dependsOnIDs); err != nil {
+		return "", err
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return "", fmt.Errorf("committing add: %w", err)
 	}
 	return id, nil
 }
@@ -179,13 +179,13 @@ func noSuchTicket(id any) error {
 // project: the ticket must exist and belong to the same project, since a
 // child grouped under a parent in another project's backlog would be
 // invisible to anyone scoped to either one.
-func checkParent(id int, project string) error {
+func checkParent(id string, project string) error {
 	var parentProject string
 	if err := db.QueryRow(`SELECT project FROM tickets WHERE id = ?`, id).Scan(&parentProject); err != nil {
 		return noSuchTicket(id)
 	}
 	if parentProject != project {
-		return fmt.Errorf("parent ticket %d belongs to project %q, not %q", id, parentProject, project)
+		return fmt.Errorf("parent ticket %s belongs to project %q, not %q", id, parentProject, project)
 	}
 	return nil
 }
@@ -195,24 +195,24 @@ func checkParent(id int, project string) error {
 // ticket's own descendant its parent is what would create a cycle, so Edit
 // checks this before accepting a new parent_id. The depth cap keeps a
 // pathological chain from recursing forever.
-func descendsFrom(candidate, id int) (bool, error) {
+func descendsFrom(candidate, id string) (bool, error) {
 	return descendsFromDepth(candidate, id, 0)
 }
 
-func descendsFromDepth(candidate, id, depth int) (bool, error) {
+func descendsFromDepth(candidate, id string, depth int) (bool, error) {
 	if candidate == id {
 		return true, nil
 	}
 	if depth > 1000 {
-		return false, fmt.Errorf("ticket %d's parent chain is too deep to check", id)
+		return false, fmt.Errorf("ticket %s's parent chain is too deep to check", id)
 	}
 	rows, err := db.Query(`SELECT id FROM tickets WHERE parent_id = ?`, id)
 	if err != nil {
 		return false, err
 	}
-	var children []int
+	var children []string
 	for rows.Next() {
-		var child int
+		var child string
 		if err := rows.Scan(&child); err != nil {
 			rows.Close()
 			return false, err
@@ -233,14 +233,14 @@ func descendsFromDepth(candidate, id, depth int) (bool, error) {
 	return false, nil
 }
 
-func checkDependencies(id int, project string, dependsOnIDs []int) error {
-	seen := map[int]bool{}
+func checkDependencies(id string, project string, dependsOnIDs []string) error {
+	seen := map[string]bool{}
 	for _, depID := range dependsOnIDs {
-		if depID == id && id != 0 {
+		if depID == id && id != "" {
 			return errors.New("a ticket cannot depend on itself")
 		}
 		if seen[depID] {
-			return fmt.Errorf("duplicate dependency: %d", depID)
+			return fmt.Errorf("duplicate dependency: %s", depID)
 		}
 		seen[depID] = true
 
@@ -249,37 +249,37 @@ func checkDependencies(id int, project string, dependsOnIDs []int) error {
 			return noSuchTicket(depID)
 		}
 		if depProject != project {
-			return fmt.Errorf("dependency ticket %d belongs to project %q, not %q", depID, depProject, project)
+			return fmt.Errorf("dependency ticket %s belongs to project %q, not %q", depID, depProject, project)
 		}
-		if id != 0 {
+		if id != "" {
 			if cyclic, err := dependsOn(depID, id); err != nil {
 				return err
 			} else if cyclic {
-				return fmt.Errorf("depending on %d would create a cycle", depID)
+				return fmt.Errorf("depending on %s would create a cycle", depID)
 			}
 		}
 	}
 	return nil
 }
 
-func dependsOn(ticketID, targetID int) (bool, error) {
+func dependsOn(ticketID, targetID string) (bool, error) {
 	return dependsOnDepth(ticketID, targetID, 0)
 }
 
-func dependsOnDepth(ticketID, targetID, depth int) (bool, error) {
+func dependsOnDepth(ticketID, targetID string, depth int) (bool, error) {
 	if ticketID == targetID {
 		return true, nil
 	}
 	if depth > 1000 {
-		return false, fmt.Errorf("ticket %d's dependency chain is too deep to check", ticketID)
+		return false, fmt.Errorf("ticket %s's dependency chain is too deep to check", ticketID)
 	}
 	rows, err := db.Query(`SELECT depends_on_id FROM ticket_dependencies WHERE ticket_id = ?`, ticketID)
 	if err != nil {
 		return false, err
 	}
-	var dependencies []int
+	var dependencies []string
 	for rows.Next() {
-		var depID int
+		var depID string
 		if err := rows.Scan(&depID); err != nil {
 			rows.Close()
 			return false, err
@@ -300,7 +300,7 @@ func dependsOnDepth(ticketID, targetID, depth int) (bool, error) {
 	return false, nil
 }
 
-func hasUnfinishedDependencies(dependsOnIDs []int) (bool, error) {
+func hasUnfinishedDependencies(dependsOnIDs []string) (bool, error) {
 	for _, depID := range dependsOnIDs {
 		var status string
 		if err := db.QueryRow(`SELECT status FROM tickets WHERE id = ?`, depID).Scan(&status); err != nil {
@@ -317,7 +317,7 @@ type sqlExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }
 
-func replaceDependencies(exec sqlExecer, id int, dependsOnIDs []int) error {
+func replaceDependencies(exec sqlExecer, id string, dependsOnIDs []string) error {
 	if _, err := exec.Exec(`DELETE FROM ticket_dependencies WHERE ticket_id = ?`, id); err != nil {
 		return err
 	}
@@ -332,23 +332,23 @@ func replaceDependencies(exec sqlExecer, id int, dependsOnIDs []int) error {
 	return nil
 }
 
-// nullableInt turns a possibly-nil *int into the value database/sql sends for
-// a NULL column.
-func nullableInt(v *int) any {
+// nullableString turns a possibly-nil *string into the value database/sql
+// sends for a NULL column.
+func nullableString(v *string) any {
 	if v == nil {
 		return nil
 	}
 	return *v
 }
 
-func Bump(id, priority int) (int, int, error) {
+func Bump(id string, priority int) (string, int, error) {
 	res, err := db.Exec(`UPDATE tickets SET priority = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, priority, id)
 	if err != nil {
-		return 0, 0, fmt.Errorf("update failed: %w", err)
+		return "", 0, fmt.Errorf("update failed: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return 0, 0, noSuchTicket(id)
+		return "", 0, noSuchTicket(id)
 	}
 	return id, priority, nil
 }
@@ -358,14 +358,14 @@ func Bump(id, priority int) (int, int, error) {
 // sequence is unambiguous without disturbing tickets left out of the call.
 // Tickets still tie-break by priority first, so a custom sequence is only
 // visible among tickets that share a priority.
-func Reorder(ids []int) error {
+func Reorder(ids []string) error {
 	if len(ids) == 0 {
 		return errors.New("no tickets given")
 	}
-	seen := map[int]bool{}
+	seen := map[string]bool{}
 	for _, id := range ids {
 		if seen[id] {
-			return fmt.Errorf("duplicate ticket: %d", id)
+			return fmt.Errorf("duplicate ticket: %s", id)
 		}
 		seen[id] = true
 	}
@@ -403,13 +403,13 @@ func Reorder(ids []int) error {
 	return fmt.Errorf("reorder changed %d tickets, want %d", n, len(ids))
 }
 
-func Done(id int) error {
+func Done(id string) error {
 	return closeTicket(id, nil, nil)
 }
 
 // closeTicket marks id done, recording attempt alongside when it came through
 // the done hook, and commit as the done event's data when known.
-func closeTicket(id int, attempt *doneAttempt, commit *doneCommit) error {
+func closeTicket(id string, attempt *doneAttempt, commit *doneCommit) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -441,7 +441,7 @@ func closeTicket(id int, attempt *doneAttempt, commit *doneCommit) error {
 		if err := unblockDependents(tx, doneID); err != nil {
 			return err
 		}
-		var parentID int
+		var parentID string
 		err := tx.QueryRow(`
 			SELECT parent.id FROM tickets child
 			JOIN tickets parent ON parent.id = child.parent_id
@@ -460,7 +460,7 @@ func closeTicket(id int, attempt *doneAttempt, commit *doneCommit) error {
 		if _, err := tx.Exec(`UPDATE tickets SET status = 'done', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, parentID); err != nil {
 			return fmt.Errorf("close parent failed: %w", err)
 		}
-		if err := recordEvent(tx, parentID, "done", map[string]int{"closed_by": doneID}); err != nil {
+		if err := recordEvent(tx, parentID, "done", map[string]string{"closed_by": doneID}); err != nil {
 			return err
 		}
 		doneID = parentID
@@ -470,7 +470,7 @@ func closeTicket(id int, attempt *doneAttempt, commit *doneCommit) error {
 
 // unblockDependents reopens blocked tickets whose last unfinished dependency
 // was id.
-func unblockDependents(exec sqlExecer, id int) error {
+func unblockDependents(exec sqlExecer, id string) error {
 	if _, err := exec.Exec(`
 		UPDATE tickets
 		SET status = 'open', updated_at = CURRENT_TIMESTAMP
@@ -492,7 +492,7 @@ func unblockDependents(exec sqlExecer, id int) error {
 // or done ticket returns to in_progress with its cached plan, and so its
 // leases. A done ticket's leases are re-checked, since another ticket may have
 // planned the same concepts since it closed.
-func Reject(id int, reason string) error {
+func Reject(id string, reason string) error {
 	if strings.TrimSpace(reason) == "" {
 		return errors.New("a reason is required")
 	}
@@ -501,11 +501,21 @@ func Reject(id int, reason string) error {
 		return err
 	}
 	if ticket.Status != "in_progress" && ticket.Status != "done" {
-		return fmt.Errorf("ticket %d is %s; only in_progress or done tickets can be rejected", id, ticket.Status)
+		return fmt.Errorf("ticket %s is %s; only in_progress or done tickets can be rejected", id, ticket.Status)
 	}
 	prefix, err := PrefixFor(ticket.Project)
 	if err != nil {
 		return err
+	}
+	shorts, err := ShortIDMap()
+	if err != nil {
+		return err
+	}
+	epicID := ""
+	if ticket.Plan != nil && ticket.Plan.Epic != "" {
+		if epicID, err = ResolveRef(ticket.Plan.Epic); err != nil {
+			return fmt.Errorf("resolving epic %s: %w", ticket.Plan.Epic, err)
+		}
 	}
 	tx, err := db.Begin()
 	if err != nil {
@@ -513,7 +523,7 @@ func Reject(id int, reason string) error {
 	}
 	defer tx.Rollback()
 	if ticket.Status == "done" && ticket.Plan != nil {
-		if err := checkLeases(tx, ticket, prefix, *ticket.Plan); err != nil {
+		if err := checkLeases(tx, ticket, prefix, shorts, epicID, *ticket.Plan); err != nil {
 			return err
 		}
 	}
@@ -532,7 +542,7 @@ func Reject(id int, reason string) error {
 // Reopen records a done ticket found broken later. It returns to open with its
 // cached plan cleared, so whoever claims it must plan again before holding
 // leases.
-func Reopen(id int, reason string) error {
+func Reopen(id string, reason string) error {
 	if strings.TrimSpace(reason) == "" {
 		return errors.New("a reason is required")
 	}
@@ -541,7 +551,7 @@ func Reopen(id int, reason string) error {
 		return err
 	}
 	if ticket.Status != "done" {
-		return fmt.Errorf("ticket %d is %s; only done tickets can be reopened", id, ticket.Status)
+		return fmt.Errorf("ticket %s is %s; only done tickets can be reopened", id, ticket.Status)
 	}
 	tx, err := db.Begin()
 	if err != nil {
@@ -621,9 +631,9 @@ func hydrateConcepts(project string, tickets []Ticket) error {
 		return fmt.Errorf("loading plan concepts: %w", err)
 	}
 	defer rows.Close()
-	declared := map[int][]string{}
+	declared := map[string][]string{}
 	for rows.Next() {
-		var id int
+		var id string
 		var concept string
 		if err := rows.Scan(&id, &concept); err != nil {
 			return fmt.Errorf("loading plan concepts: %w", err)
@@ -676,7 +686,7 @@ func hydrateDependencies(tickets []Ticket) error {
 	return nil
 }
 
-func dependenciesFor(id int) ([]int, []int, error) {
+func dependenciesFor(id string) ([]string, []string, error) {
 	rows, err := db.Query(`
 		SELECT dep.id, dep.status
 		FROM ticket_dependencies td
@@ -688,10 +698,10 @@ func dependenciesFor(id int) ([]int, []int, error) {
 	}
 	defer rows.Close()
 
-	var dependsOn []int
-	var blockedBy []int
+	var dependsOn []string
+	var blockedBy []string
 	for rows.Next() {
-		var depID int
+		var depID string
 		var status string
 		if err := rows.Scan(&depID, &status); err != nil {
 			return nil, nil, err
@@ -784,7 +794,7 @@ func StaleTickets(options StaleOptions) ([]Ticket, error) {
 	if err != nil {
 		return nil, err
 	}
-	held := map[int][]string{}
+	held := map[string][]string{}
 	for _, lease := range leases {
 		held[lease.TicketID] = append(held[lease.TicketID], lease.Concept)
 	}
@@ -833,9 +843,9 @@ const leaseConflict = `SELECT 1 FROM tickets holder,
 // its own children are searched instead, in the same order. An epic with
 // nothing claimable left is skipped. Top-level candidates are tickets with no
 // parent, or whose parent is done, so children of a closed epic are not lost.
-func nextClaimable(q sqlQueryer, project string, parentID *int, depth int) (int, bool, error) {
+func nextClaimable(q sqlQueryer, project string, parentID *string, depth int) (string, bool, error) {
 	if depth > 1000 {
-		return 0, false, errors.New("parent chain is too deep to search")
+		return "", false, errors.New("parent chain is too deep to search")
 	}
 	scope := `(parent_id IS NULL OR parent_id IN (SELECT id FROM tickets WHERE status = 'done'))`
 	args := []any{project}
@@ -862,10 +872,10 @@ func nextClaimable(q sqlQueryer, project string, parentID *int, depth int) (int,
 		args...,
 	)
 	if err != nil {
-		return 0, false, err
+		return "", false, err
 	}
 	type candidate struct {
-		id     int
+		id     string
 		status string
 		epic   bool
 	}
@@ -876,13 +886,13 @@ func nextClaimable(q sqlQueryer, project string, parentID *int, depth int) (int,
 		var c candidate
 		if err := rows.Scan(&c.id, &c.status, &c.epic); err != nil {
 			rows.Close()
-			return 0, false, err
+			return "", false, err
 		}
 		candidates = append(candidates, c)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, false, err
+		return "", false, err
 	}
 
 	for _, c := range candidates {
@@ -897,7 +907,7 @@ func nextClaimable(q sqlQueryer, project string, parentID *int, depth int) (int,
 			return id, ok, err
 		}
 	}
-	return 0, false, nil
+	return "", false, nil
 }
 
 func NextTicket(project string) (Ticket, error) {
@@ -1043,7 +1053,7 @@ func ReviewQueue(project string) ([]QueueItem, error) {
 		err := db.QueryRow(`SELECT at FROM ticket_events WHERE ticket_id = ? AND event = 'plan'
 			ORDER BY id DESC LIMIT 1`, ticket.ID).Scan(&item.Since)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("reading plan time for ticket %d: %w", ticket.ID, err)
+			return nil, fmt.Errorf("reading plan time for ticket %s: %w", ticket.ID, err)
 		}
 		if item.Since.IsZero() {
 			item.Since = ticket.UpdatedAt
@@ -1076,11 +1086,11 @@ func ClaimNextEvaluated(ctx context.Context, project string) (Ticket, *JevEvalua
 	if err != nil {
 		return Ticket{}, nil, err
 	}
-	prefix, err := PrefixFor(candidate.Project)
+	ref, err := RefFor(candidate.Project, candidate.ID)
 	if err != nil {
 		return Ticket{}, nil, err
 	}
-	evaluation := evaluateJev(ctx, cfg, candidate, prefix)
+	evaluation := evaluateJev(ctx, cfg, candidate, ref)
 	status := "in_progress"
 	if cfg.Mode == JevEnforce && evaluation.Err == nil && evaluation.PolicyDecision == "require_human_input" {
 		status = "blocked"
@@ -1099,13 +1109,13 @@ func ClaimNextEvaluated(ctx context.Context, project string) (Ticket, *JevEvalua
 // Claim moves one named ticket to in_progress. Status is checked before
 // capacity so that a ticket that cannot be claimed anyway reports why, rather
 // than sending the caller off to clear the review queue.
-func Claim(id int) (Ticket, error) {
+func Claim(id string) (Ticket, error) {
 	ticket, err := Show(id)
 	if err != nil {
 		return Ticket{}, err
 	}
 	if ticket.Status != "open" {
-		return Ticket{}, fmt.Errorf("ticket %d is %s; only open tickets can be claimed", id, ticket.Status)
+		return Ticket{}, fmt.Errorf("ticket %s is %s; only open tickets can be claimed", id, ticket.Status)
 	}
 	if err := CheckCapacity(ticket.Project); err != nil {
 		return Ticket{}, err
@@ -1165,7 +1175,7 @@ func claimNext(project string) (Ticket, error) {
 	return ticket, nil
 }
 
-func transitionOpenTicket(id int, status string) (Ticket, error) {
+func transitionOpenTicket(id string, status string) (Ticket, error) {
 	tx, err := db.Begin()
 	if err != nil {
 		return Ticket{}, err
@@ -1197,7 +1207,7 @@ func transitionOpenTicket(id int, status string) (Ticket, error) {
 	return ticket, nil
 }
 
-func Show(id int) (Ticket, error) {
+func Show(id string) (Ticket, error) {
 	ticket, err := scanTicket(db.QueryRow(
 		`SELECT `+ticketColumns+` FROM tickets WHERE id = ?`, id).Scan)
 	if err != nil {
@@ -1302,13 +1312,13 @@ type EditOptions struct {
 	// ParentID sets the ticket's parent when non-nil; ClearParent removes it
 	// regardless of ParentID. Both unset leaves the parent untouched, the way
 	// a nil field leaves any other column untouched.
-	ParentID          *int
+	ParentID          *string
 	ClearParent       bool
-	DependsOnIDs      *[]int
+	DependsOnIDs      *[]string
 	ClearDependencies bool
 }
 
-func Edit(id int, options EditOptions) (Ticket, error) {
+func Edit(id string, options EditOptions) (Ticket, error) {
 	sets := []string{}
 	args := []any{}
 
@@ -1360,7 +1370,7 @@ func Edit(id int, options EditOptions) (Ticket, error) {
 		if cyclic, err := descendsFrom(*options.ParentID, id); err != nil {
 			return Ticket{}, err
 		} else if cyclic {
-			return Ticket{}, fmt.Errorf("setting parent to %d would create a cycle", *options.ParentID)
+			return Ticket{}, fmt.Errorf("setting parent to %s would create a cycle", *options.ParentID)
 		}
 		sets = append(sets, `parent_id = ?`)
 		args = append(args, *options.ParentID)
@@ -1381,7 +1391,7 @@ func Edit(id int, options EditOptions) (Ticket, error) {
 		if project == "" {
 			project = current.Project
 		}
-		dependencies := []int{}
+		dependencies := []string{}
 		if options.DependsOnIDs != nil {
 			dependencies = *options.DependsOnIDs
 		}
@@ -1419,7 +1429,7 @@ func Edit(id int, options EditOptions) (Ticket, error) {
 		}
 	}
 	if dependencyEdit {
-		dependencies := []int{}
+		dependencies := []string{}
 		if options.DependsOnIDs != nil {
 			dependencies = *options.DependsOnIDs
 		}
@@ -1434,7 +1444,7 @@ func Edit(id int, options EditOptions) (Ticket, error) {
 	return Show(id)
 }
 
-func Remove(id int, project string) error {
+func Remove(id string, project string) error {
 	project, err := ResolveProject(project)
 	if err != nil {
 		return err

@@ -49,6 +49,10 @@ func printTickets(tickets []tix.Ticket) error {
 	if err != nil {
 		return err
 	}
+	shorts, err := tix.ShortIDMap()
+	if err != nil {
+		return err
+	}
 	for _, ticket := range tickets {
 		marker := ""
 		if ticket.Status == "done" {
@@ -59,7 +63,7 @@ func printTickets(tickets []tix.Ticket) error {
 			concepts = " {" + strings.Join(ticket.Concepts, ", ") + "}"
 		}
 		fmt.Printf("%s%s [P%d] %s%s\n",
-			marker, tix.FormatID(prefixes[ticket.Project], ticket.ID), ticket.Priority, ticket.Title, concepts)
+			marker, tix.FormatID(prefixes[ticket.Project], ticket.ID, shorts), ticket.Priority, ticket.Title, concepts)
 	}
 	return nil
 }

@@ -57,12 +57,16 @@ var staleCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		shorts, err := tix.ShortIDMap()
+		if err != nil {
+			return err
+		}
 		now := time.Now()
 		for _, ticket := range tickets {
 			// The age is what the caller is here for, so it prints alongside the
 			// status rather than as a raw timestamp to subtract by hand.
 			fmt.Printf("%s [P%d] %s (%s, idle %s)\n",
-				tix.FormatID(prefixes[ticket.Project], ticket.ID), ticket.Priority, ticket.Title,
+				tix.FormatID(prefixes[ticket.Project], ticket.ID, shorts), ticket.Priority, ticket.Title,
 				ticket.Status, tix.FormatAge(now.Sub(ticket.UpdatedAt)))
 			if len(ticket.Leases) > 0 {
 				fmt.Printf("  leases: %s\n", strings.Join(ticket.Leases, ", "))

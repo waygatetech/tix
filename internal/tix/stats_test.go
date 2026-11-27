@@ -11,15 +11,15 @@ func TestBuildStats(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme", "zen")
 
-	add := func(project string) int {
+	add := func(project string) string {
 		id, err := Add("t", "", 1, project, nil)
 		if err != nil {
 			t.Fatalf("Add: %v", err)
 		}
-		return int(id)
+		return id
 	}
 	now := time.Now().UTC()
-	event := func(id int, name string, ago time.Duration, data string) {
+	event := func(id string, name string, ago time.Duration, data string) {
 		var d any
 		if data != "" {
 			d = data
@@ -145,13 +145,13 @@ func TestBuildStats(t *testing.T) {
 func TestBuildStatsInherited(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
-	ids := map[string]int{}
+	ids := map[string]string{}
 	for _, name := range []string{"inherited", "reviewed"} {
 		id, err := Add(name, "", 1, "acme", nil)
 		if err != nil {
 			t.Fatalf("Add: %v", err)
 		}
-		ids[name] = int(id)
+		ids[name] = id
 	}
 	for _, e := range []struct {
 		ticket, event, data string

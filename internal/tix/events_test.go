@@ -13,23 +13,23 @@ func TestLifecycleEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add(epic): %v", err)
 	}
-	epic := int(epicID)
+	epic := epicID
 	childID, err := Add("child", "", 1, "acme", &epic)
 	if err != nil {
 		t.Fatalf("Add(child): %v", err)
 	}
-	child := int(childID)
+	child := childID
 
 	if _, err := ClaimNext("acme"); err != nil {
 		t.Fatalf("ClaimNext: %v", err)
 	}
 	if err := Done(child); err != nil {
-		t.Fatalf("Done(%d): %v", child, err)
+		t.Fatalf("Done(%s): %v", child, err)
 	}
 
 	tests := []struct {
 		name string
-		id   int
+		id   string
 		want []string
 	}{
 		{"child is claimed then done", child, []string{"claim", "done"}},
@@ -39,7 +39,7 @@ func TestLifecycleEvents(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			events, err := Events(tt.id)
 			if err != nil {
-				t.Fatalf("Events(%d): %v", tt.id, err)
+				t.Fatalf("Events(%s): %v", tt.id, err)
 			}
 			got := []string{}
 			for _, e := range events {
@@ -60,7 +60,7 @@ func TestEventsAreAppendOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := Done(int(id)); err != nil {
+	if err := Done(id); err != nil {
 		t.Fatalf("Done: %v", err)
 	}
 
@@ -75,10 +75,10 @@ func TestEventsAreAppendOnly(t *testing.T) {
 		})
 	}
 
-	if err := Remove(int(id), "acme"); err != nil {
+	if err := Remove(id, "acme"); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	events, err := Events(int(id))
+	events, err := Events(id)
 	if err != nil {
 		t.Fatalf("Events: %v", err)
 	}
@@ -98,24 +98,24 @@ func TestNote(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		id      int
+		id      string
 		body    string
 		wantErr bool
 	}{
-		{"appends a note", int(id), "handoff: tests pass, docs next", false},
-		{"rejects a blank note", int(id), "  \n", true},
-		{"rejects a missing ticket", 9999, "lost", true},
+		{"appends a note", id, "handoff: tests pass, docs next", false},
+		{"rejects a blank note", id, "  \n", true},
+		{"rejects a missing ticket", missingID, "lost", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := Note(tt.id, tt.body)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("Note(%d, %q) error = %v, wantErr %v", tt.id, tt.body, err, tt.wantErr)
+				t.Fatalf("Note(%s, %q) error = %v, wantErr %v", tt.id, tt.body, err, tt.wantErr)
 			}
 		})
 	}
 
-	notes, err := Notes(int(id))
+	notes, err := Notes(id)
 	if err != nil {
 		t.Fatalf("Notes: %v", err)
 	}

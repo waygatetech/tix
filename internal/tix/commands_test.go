@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -66,9 +67,34 @@ func listLines(t *testing.T, project string, showAll bool) []string {
 			marker = "x "
 		}
 		lines = append(lines, fmt.Sprintf("%s%s [P%d] %s",
-			marker, FormatID(prefixes[ticket.Project], ticket.ID), ticket.Priority, ticket.Title))
+			marker, FormatID(prefixes[ticket.Project], strconv.Itoa(ticketNumber(t, ticket.ID)), nil), ticket.Priority, ticket.Title))
 	}
 	return lines
+}
+
+// missingID is a well-formed ticket id no test database holds.
+const missingID = "00000000-0000-4000-8000-000000000000"
+
+// ticketNumber is a ticket's SQLite rowid, which counts up as tickets are
+// added, so tests can name tickets 1, 2, 3 the way they did when ids were a
+// counter.
+func ticketNumber(t *testing.T, id string) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT rowid FROM tickets WHERE id = ?`, id).Scan(&n); err != nil {
+		t.Fatalf("rowid of %s: %v", id, err)
+	}
+	return n
+}
+
+// nthTicket is the id of the ticket whose ticketNumber is n.
+func nthTicket(t *testing.T, n int) string {
+	t.Helper()
+	var id string
+	if err := db.QueryRow(`SELECT id FROM tickets WHERE rowid = ?`, n).Scan(&id); err != nil {
+		t.Fatalf("ticket %d: %v", n, err)
+	}
+	return id
 }
 
 // stripTimestamps checks that a read populated the timestamps and then clears
@@ -80,7 +106,7 @@ func stripTimestamps(t *testing.T, tickets []Ticket) []Ticket {
 	stripped := make([]Ticket, len(tickets))
 	for i, ticket := range tickets {
 		if ticket.CreatedAt.IsZero() || ticket.UpdatedAt.IsZero() {
-			t.Errorf("ticket %d timestamps = (%v, %v), want both set", ticket.ID, ticket.CreatedAt, ticket.UpdatedAt)
+			t.Errorf("ticket %s timestamps = (%v, %v), want both set", ticket.ID, ticket.CreatedAt, ticket.UpdatedAt)
 		}
 		ticket.CreatedAt = time.Time{}
 		ticket.UpdatedAt = time.Time{}
@@ -92,12 +118,12 @@ func stripTimestamps(t *testing.T, tickets []Ticket) []Ticket {
 
 // backdate moves a ticket's last write into the past, which is the only way to
 // test staleness without a test that sleeps for a day.
-func backdate(t *testing.T, id int, age time.Duration) {
+func backdate(t *testing.T, id string, age time.Duration) {
 	t.Helper()
 
 	when := time.Now().UTC().Add(-age).Format(sqlTimeLayout)
 	if _, err := db.Exec(`UPDATE tickets SET updated_at = ? WHERE id = ?`, when, id); err != nil {
-		t.Fatalf("backdate ticket %d: %v", id, err)
+		t.Fatalf("backdate ticket %s: %v", id, err)
 	}
 }
 
@@ -126,8 +152,10 @@ func TestAddListNextAndProjectIsolation(t *testing.T) {
 		t.Fatalf("Add other project ticket: %v", err)
 	}
 
-	if firstID != 1 || secondID != 2 || otherID != 3 {
-		t.Fatalf("unexpected IDs: got %d, %d, %d", firstID, secondID, otherID)
+	for _, id := range []string{firstID, secondID, otherID} {
+		if !uuidV4.MatchString(id) {
+			t.Fatalf("Add id = %q, want a UUIDv4", id)
+		}
 	}
 
 	got := listLines(t, "acme", false)
@@ -143,8 +171,8 @@ func TestAddListNextAndProjectIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NextTicket(acme): %v", err)
 	}
-	if next.ID != 2 || next.Title != "write docs" || next.Body != "README" || next.Priority != 0 {
-		t.Fatalf("NextTicket(acme) = (%d, %q, %q, %d), want (2, %q, %q, 0)",
+	if next.ID != secondID || next.Title != "write docs" || next.Body != "README" || next.Priority != 0 {
+		t.Fatalf("NextTicket(acme) = (%s, %q, %q, %d), want (2, %q, %q, 0)",
 			next.ID, next.Title, next.Body, next.Priority, "write docs", "README")
 	}
 
@@ -192,11 +220,11 @@ func TestNewTicketWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add dep: %v", err)
 	}
-	ticket, err := NewTicket("t", "b", 1, "acme", nil, int(depID))
+	ticket, err := NewTicket("t", "b", 1, "acme", nil, depID)
 	if err != nil {
 		t.Fatalf("NewTicket: %v", err)
 	}
-	if ticket.ID != 0 || ticket.Status != "blocked" || ticket.Priority != 1 {
+	if ticket.ID != "" || ticket.Status != "blocked" || ticket.Priority != 1 {
 		t.Fatalf("NewTicket = %+v, want no id, blocked, P1", ticket)
 	}
 	tickets, err := AllTickets()
@@ -220,7 +248,7 @@ func TestReadsNullUpdatedAtAsCreatedAt(t *testing.T) {
 		t.Fatalf("clear updated_at: %v", err)
 	}
 
-	ticket, err := Show(int(id))
+	ticket, err := Show(id)
 	if err != nil {
 		t.Fatalf("Show: %v", err)
 	}
@@ -232,8 +260,8 @@ func TestReadsNullUpdatedAtAsCreatedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StaleTickets: %v", err)
 	}
-	if len(stale) != 1 || stale[0].ID != int(id) {
-		t.Errorf("StaleTickets = %#v, want ticket %d", stale, id)
+	if len(stale) != 1 || stale[0].ID != id {
+		t.Errorf("StaleTickets = %#v, want ticket %s", stale, id)
 	}
 }
 
@@ -250,8 +278,8 @@ func TestDoneFiltersOpenListAndNext(t *testing.T) {
 		t.Fatalf("Add second ticket: %v", err)
 	}
 
-	if err := Done(int(firstID)); err != nil {
-		t.Fatalf("Done(%d): %v", firstID, err)
+	if err := Done(firstID); err != nil {
+		t.Fatalf("Done(%s): %v", firstID, err)
 	}
 
 	got := listLines(t, "acme", false)
@@ -270,12 +298,12 @@ func TestDoneFiltersOpenListAndNext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NextTicket(acme): %v", err)
 	}
-	if next.ID != int(secondID) || next.Title != "second" {
-		t.Fatalf("NextTicket(acme) = (%d, %q, ...), want (%d, %q, ...)", next.ID, next.Title, secondID, "second")
+	if next.ID != secondID || next.Title != "second" {
+		t.Fatalf("NextTicket(acme) = (%s, %q, ...), want (%s, %q, ...)", next.ID, next.Title, secondID, "second")
 	}
 
-	if err := Done(int(secondID)); err != nil {
-		t.Fatalf("Done(%d): %v", secondID, err)
+	if err := Done(secondID); err != nil {
+		t.Fatalf("Done(%s): %v", secondID, err)
 	}
 	_, err = NextTicket("acme")
 	if err == nil || err.Error() != "no open tickets" {
@@ -287,13 +315,13 @@ func TestClaimNextDescendsIntoEpicAndDoneClosesIt(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	add := func(title string, priority int, parent *int) int {
+	add := func(title string, priority int, parent *string) string {
 		t.Helper()
 		id, err := Add(title, "", priority, "acme", parent)
 		if err != nil {
 			t.Fatalf("Add(%q): %v", title, err)
 		}
-		return int(id)
+		return id
 	}
 	epic := add("epic", 1, nil)
 	loose := add("loose", 2, nil)
@@ -301,13 +329,13 @@ func TestClaimNextDescendsIntoEpicAndDoneClosesIt(t *testing.T) {
 	child2 := add("child two", 3, &epic)
 
 	// The epic outranks the loose ticket, so its lower-priority children do too.
-	for _, want := range []int{child1, child2, loose} {
+	for _, want := range []string{child1, child2, loose} {
 		got, err := ClaimNext("acme")
 		if err != nil {
 			t.Fatalf("ClaimNext: %v", err)
 		}
 		if got.ID != want {
-			t.Fatalf("ClaimNext = %d (%s), want %d", got.ID, got.Title, want)
+			t.Fatalf("ClaimNext = %s (%s), want %s", got.ID, got.Title, want)
 		}
 	}
 	if _, err := ClaimNext("acme"); err == nil || err.Error() != "no open tickets" {
@@ -345,8 +373,8 @@ func TestListTicketsFilters(t *testing.T) {
 	if _, err := Add("other project", "body", 1, "zen", nil); err != nil {
 		t.Fatalf("Add other project ticket: %v", err)
 	}
-	if err := Done(int(firstID)); err != nil {
-		t.Fatalf("Done(%d): %v", firstID, err)
+	if err := Done(firstID); err != nil {
+		t.Fatalf("Done(%s): %v", firstID, err)
 	}
 
 	priority := 1
@@ -361,7 +389,7 @@ func TestListTicketsFilters(t *testing.T) {
 	}
 	want := []Ticket{
 		{
-			ID:       3,
+			ID:       nthTicket(t, 3),
 			Title:    "third",
 			Body:     "body",
 			Status:   "open",
@@ -461,8 +489,8 @@ func TestListTicketsQuerySeesDoneTickets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := Done(int(id)); err != nil {
-		t.Fatalf("Done(%d): %v", id, err)
+	if err := Done(id); err != nil {
+		t.Fatalf("Done(%s): %v", id, err)
 	}
 
 	open, err := ListTickets(ListOptions{Project: "acme", Query: "search"})
@@ -477,8 +505,8 @@ func TestListTicketsQuerySeesDoneTickets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTickets showing all: %v", err)
 	}
-	if len(all) != 1 || all[0].ID != int(id) {
-		t.Errorf("search over all statuses = %#v, want ticket %d", all, id)
+	if len(all) != 1 || all[0].ID != id {
+		t.Errorf("search over all statuses = %#v, want ticket %s", all, id)
 	}
 }
 
@@ -491,12 +519,12 @@ func TestShowReturnsTicketByID(t *testing.T) {
 		t.Fatalf("Add ticket: %v", err)
 	}
 
-	got, err := Show(int(id))
+	got, err := Show(id)
 	if err != nil {
-		t.Fatalf("Show(%d): %v", id, err)
+		t.Fatalf("Show(%s): %v", id, err)
 	}
 	want := Ticket{
-		ID:       int(id),
+		ID:       id,
 		Title:    "show me",
 		Body:     "full details",
 		Status:   "open",
@@ -504,13 +532,13 @@ func TestShowReturnsTicketByID(t *testing.T) {
 		Project:  "acme",
 	}
 	if got := stripTimestamps(t, []Ticket{got})[0]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Show(%d) = %#v, want %#v", id, got, want)
+		t.Fatalf("Show(%s) = %#v, want %#v", id, got, want)
 	}
 
-	if _, err := Show(99); err == nil || !strings.Contains(err.Error(), "no such ticket: 99") {
-		t.Fatalf("Show missing ticket error = %v, want no such ticket: 99", err)
+	if _, err := Show(missingID); err == nil || !strings.Contains(err.Error(), "no such ticket: "+missingID) {
+		t.Fatalf("Show missing ticket error = %v, want no such ticket: %s", err, missingID)
 	}
-	if _, err := Show(99); err == nil || !strings.Contains(err.Error(), dbPath()) {
+	if _, err := Show(missingID); err == nil || !strings.Contains(err.Error(), dbPath()) {
 		t.Fatalf("Show missing ticket error = %v, want it to name %s", err, dbPath())
 	}
 }
@@ -520,16 +548,16 @@ func TestShowReturnsTicketByID(t *testing.T) {
 func TestWritesMoveUpdatedAt(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		write func(id int) error
+		write func(id string) error
 	}{
-		{"Done", func(id int) error { return Done(id) }},
-		{"Bump", func(id int) error { _, _, err := Bump(id, 0); return err }},
-		{"Edit", func(id int) error {
+		{"Done", func(id string) error { return Done(id) }},
+		{"Bump", func(id string) error { _, _, err := Bump(id, 0); return err }},
+		{"Edit", func(id string) error {
 			title := "retitled"
 			_, err := Edit(id, EditOptions{Title: &title})
 			return err
 		}},
-		{"ClaimNext", func(int) error { _, err := ClaimNext("acme"); return err }},
+		{"ClaimNext", func(string) error { _, err := ClaimNext("acme"); return err }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// A database per case, so ClaimNext cannot claim a ticket an
@@ -541,17 +569,17 @@ func TestWritesMoveUpdatedAt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Add: %v", err)
 			}
-			backdate(t, int(id), 48*time.Hour)
+			backdate(t, id, 48*time.Hour)
 
-			before, err := Show(int(id))
+			before, err := Show(id)
 			if err != nil {
 				t.Fatalf("Show before write: %v", err)
 			}
-			if err := tc.write(int(id)); err != nil {
+			if err := tc.write(id); err != nil {
 				t.Fatalf("%s: %v", tc.name, err)
 			}
 
-			after, err := Show(int(id))
+			after, err := Show(id)
 			if err != nil {
 				t.Fatalf("Show after write: %v", err)
 			}
@@ -580,7 +608,7 @@ func TestEditStoresStructuredBody(t *testing.T) {
 		"The avatar dropdown menu is implemented differently on admin dashboard pages and attendee-facing pages.\n\n" +
 		"## Scope\n\n" +
 		"Consolidate the avatar dropdown into one shared component used by `templates/layout.html` and `templates/admin/layout.html`.\n"
-	ticket, err := Edit(int(id), EditOptions{Body: &body})
+	ticket, err := Edit(id, EditOptions{Body: &body})
 	if err != nil {
 		t.Fatalf("Edit body: %v", err)
 	}
@@ -588,7 +616,7 @@ func TestEditStoresStructuredBody(t *testing.T) {
 		t.Fatalf("body = %q, want %q", ticket.Body, body)
 	}
 
-	shown, err := Show(int(id))
+	shown, err := Show(id)
 	if err != nil {
 		t.Fatalf("Show: %v", err)
 	}
@@ -607,17 +635,17 @@ func TestEmptyEditLeavesUpdatedAtAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	backdate(t, int(id), 48*time.Hour)
-	before, err := Show(int(id))
+	backdate(t, id, 48*time.Hour)
+	before, err := Show(id)
 	if err != nil {
 		t.Fatalf("Show: %v", err)
 	}
 
-	if _, err := Edit(int(id), EditOptions{}); err == nil {
+	if _, err := Edit(id, EditOptions{}); err == nil {
 		t.Fatal("Edit with no fields = nil, want an error")
 	}
 
-	after, err := Show(int(id))
+	after, err := Show(id)
 	if err != nil {
 		t.Fatalf("Show: %v", err)
 	}
@@ -640,29 +668,29 @@ func TestStaleTicketsFindsAbandonedClaims(t *testing.T) {
 	}
 
 	inProgress := "in_progress"
-	for id, age := range map[int]time.Duration{
+	for n, age := range map[int]time.Duration{
 		1: 30 * time.Hour,     // claimed and abandoned
 		2: 7 * 24 * time.Hour, // abandoned longer ago
 		3: 10 * time.Minute,   // claimed, still being worked on
 	} {
-		if _, err := Edit(id, EditOptions{Status: &inProgress}); err != nil {
-			t.Fatalf("Edit(%d): %v", id, err)
+		if _, err := Edit(nthTicket(t, n), EditOptions{Status: &inProgress}); err != nil {
+			t.Fatalf("Edit(%d): %v", n, err)
 		}
-		backdate(t, id, age)
+		backdate(t, nthTicket(t, n), age)
 	}
 	// An old ticket nobody claimed is a backlog, not a stuck ticket.
-	backdate(t, 4, 30*24*time.Hour)
-	if _, err := Edit(5, EditOptions{Status: &inProgress}); err != nil {
+	backdate(t, nthTicket(t, 4), 30*24*time.Hour)
+	if _, err := Edit(nthTicket(t, 5), EditOptions{Status: &inProgress}); err != nil {
 		t.Fatalf("Edit(5): %v", err)
 	}
-	backdate(t, 5, 30*time.Hour)
+	backdate(t, nthTicket(t, 5), 30*time.Hour)
 
 	stale, err := StaleTickets(StaleOptions{Project: "acme", Older: StaleAge})
 	if err != nil {
 		t.Fatalf("StaleTickets: %v", err)
 	}
 	// Oldest first, so the ticket most likely abandoned is read first.
-	if got := ticketIDs(stale); !reflect.DeepEqual(got, []int{2, 1}) {
+	if got := ticketIDs(t, stale); !reflect.DeepEqual(got, []int{2, 1}) {
 		t.Fatalf("StaleTickets(acme) = %v, want [2 1]", got)
 	}
 
@@ -674,7 +702,7 @@ func TestStaleTicketsFindsAbandonedClaims(t *testing.T) {
 		if err != nil {
 			t.Fatalf("StaleTickets(older=%v): %v", older, err)
 		}
-		if got := ticketIDs(stale); !reflect.DeepEqual(got, []int{2, 1, 3}) {
+		if got := ticketIDs(t, stale); !reflect.DeepEqual(got, []int{2, 1, 3}) {
 			t.Fatalf("StaleTickets(acme, %v) = %v, want [2 1 3]", older, got)
 		}
 	}
@@ -684,7 +712,7 @@ func TestStaleTicketsFindsAbandonedClaims(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StaleTickets with a status: %v", err)
 	}
-	if got := ticketIDs(stale); !reflect.DeepEqual(got, []int{4}) {
+	if got := ticketIDs(t, stale); !reflect.DeepEqual(got, []int{4}) {
 		t.Fatalf("StaleTickets(acme, open) = %v, want [4]", got)
 	}
 
@@ -692,7 +720,7 @@ func TestStaleTicketsFindsAbandonedClaims(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StaleTickets with a limit: %v", err)
 	}
-	if got := ticketIDs(stale); !reflect.DeepEqual(got, []int{2}) {
+	if got := ticketIDs(t, stale); !reflect.DeepEqual(got, []int{2}) {
 		t.Fatalf("StaleTickets(acme, limit 1) = %v, want [2]", got)
 	}
 
@@ -704,10 +732,12 @@ func TestStaleTicketsFindsAbandonedClaims(t *testing.T) {
 	}
 }
 
-func ticketIDs(tickets []Ticket) []int {
+// ticketIDs lists tickets by ticketNumber.
+func ticketIDs(t *testing.T, tickets []Ticket) []int {
+	t.Helper()
 	ids := make([]int, len(tickets))
 	for i, ticket := range tickets {
-		ids[i] = ticket.ID
+		ids[i] = ticketNumber(t, ticket.ID)
 	}
 	return ids
 }
@@ -746,7 +776,7 @@ func TestClaimNextMarksTicketInProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimNext(acme): %v", err)
 	}
-	if ticket.ID != 2 || ticket.Status != "in_progress" {
+	if ticket.ID != nthTicket(t, 2) || ticket.Status != "in_progress" {
 		t.Fatalf("ClaimNext(acme) = %#v, want ticket 2 in_progress", ticket)
 	}
 
@@ -754,7 +784,7 @@ func TestClaimNextMarksTicketInProgress(t *testing.T) {
 		t.Fatalf("NextTicket(acme) after claim should find remaining open ticket: %v", err)
 	}
 
-	claimed, err := Show(2)
+	claimed, err := Show(nthTicket(t, 2))
 	if err != nil {
 		t.Fatalf("Show(2): %v", err)
 	}
@@ -771,7 +801,7 @@ func TestDependenciesBlockQueueAndUnblockWhenDone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add(A): %v", err)
 	}
-	a := int(aID)
+	a := aID
 	bID, err := Add("B", "body", 0, "acme", nil, a)
 	if err != nil {
 		t.Fatalf("Add(B): %v", err)
@@ -780,22 +810,22 @@ func TestDependenciesBlockQueueAndUnblockWhenDone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add(C): %v", err)
 	}
-	c := int(cID)
+	c := cID
 	dID, err := Add("D", "body", 0, "acme", nil, c)
 	if err != nil {
 		t.Fatalf("Add(D): %v", err)
 	}
 
-	for _, id := range []int{int(bID), int(cID), int(dID)} {
+	for _, id := range []string{bID, cID, dID} {
 		ticket, err := Show(id)
 		if err != nil {
-			t.Fatalf("Show(%d): %v", id, err)
+			t.Fatalf("Show(%s): %v", id, err)
 		}
 		if ticket.Status != "blocked" {
-			t.Fatalf("ticket %d status = %q, want blocked", id, ticket.Status)
+			t.Fatalf("ticket %s status = %q, want blocked", id, ticket.Status)
 		}
 		if len(ticket.BlockedByIDs) != 1 {
-			t.Fatalf("ticket %d blocked_by = %v, want one blocker", id, ticket.BlockedByIDs)
+			t.Fatalf("ticket %s blocked_by = %v, want one blocker", id, ticket.BlockedByIDs)
 		}
 	}
 
@@ -804,14 +834,14 @@ func TestDependenciesBlockQueueAndUnblockWhenDone(t *testing.T) {
 		t.Fatalf("NextTicket(acme): %v", err)
 	}
 	if next.ID != a {
-		t.Fatalf("NextTicket(acme) = %d, want A (%d)", next.ID, a)
+		t.Fatalf("NextTicket(acme) = %s, want A (%s)", next.ID, a)
 	}
 
 	if err := Done(a); err != nil {
 		t.Fatalf("Done(A): %v", err)
 	}
 
-	b, err := Show(int(bID))
+	b, err := Show(bID)
 	if err != nil {
 		t.Fatalf("Show(B): %v", err)
 	}
@@ -825,11 +855,11 @@ func TestDependenciesBlockQueueAndUnblockWhenDone(t *testing.T) {
 	if cTicket.Status != "open" || len(cTicket.BlockedByIDs) != 0 {
 		t.Fatalf("C after Done(A) = status %q blocked_by %v, want open and unblocked", cTicket.Status, cTicket.BlockedByIDs)
 	}
-	d, err := Show(int(dID))
+	d, err := Show(dID)
 	if err != nil {
 		t.Fatalf("Show(D): %v", err)
 	}
-	if d.Status != "blocked" || !reflect.DeepEqual(d.BlockedByIDs, []int{c}) {
+	if d.Status != "blocked" || !reflect.DeepEqual(d.BlockedByIDs, []string{c}) {
 		t.Fatalf("D after Done(A) = status %q blocked_by %v, want blocked by C", d.Status, d.BlockedByIDs)
 	}
 }
@@ -842,12 +872,12 @@ func TestOpenTicketWithUnfinishedDependencyIsSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add(blocker): %v", err)
 	}
-	blocker := int(blockerID)
+	blocker := blockerID
 	if _, err := Add("blocked", "body", 0, "acme", nil, blocker); err != nil {
 		t.Fatalf("Add(blocked): %v", err)
 	}
 	open := "open"
-	if _, err := Edit(2, EditOptions{Status: &open}); err != nil {
+	if _, err := Edit(nthTicket(t, 2), EditOptions{Status: &open}); err != nil {
 		t.Fatalf("Edit(blocked open): %v", err)
 	}
 
@@ -856,7 +886,7 @@ func TestOpenTicketWithUnfinishedDependencyIsSkipped(t *testing.T) {
 		t.Fatalf("ClaimNext(acme): %v", err)
 	}
 	if next.ID != blocker {
-		t.Fatalf("ClaimNext(acme) = %d, want blocker %d", next.ID, blocker)
+		t.Fatalf("ClaimNext(acme) = %s, want blocker %s", next.ID, blocker)
 	}
 }
 
@@ -877,24 +907,24 @@ func TestEditSetsClearsAndRejectsDependencyCycles(t *testing.T) {
 		t.Fatalf("Add(other): %v", err)
 	}
 
-	first := int(firstID)
-	deps := []int{first}
-	second, err := Edit(int(secondID), EditOptions{DependsOnIDs: &deps})
+	first := firstID
+	deps := []string{first}
+	second, err := Edit(secondID, EditOptions{DependsOnIDs: &deps})
 	if err != nil {
 		t.Fatalf("Edit(set dependencies): %v", err)
 	}
-	if second.Status != "blocked" || !reflect.DeepEqual(second.DependsOnIDs, []int{first}) {
+	if second.Status != "blocked" || !reflect.DeepEqual(second.DependsOnIDs, []string{first}) {
 		t.Fatalf("second after dependency edit = %#v, want blocked depending on first", second)
 	}
 
-	if _, err := Edit(first, EditOptions{DependsOnIDs: &[]int{int(secondID)}}); err == nil || !strings.Contains(err.Error(), "cycle") {
+	if _, err := Edit(first, EditOptions{DependsOnIDs: &[]string{secondID}}); err == nil || !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("Edit(cyclic dependency) error = %v, want cycle", err)
 	}
-	if _, err := Edit(int(secondID), EditOptions{DependsOnIDs: &[]int{int(otherID)}}); err == nil || !strings.Contains(err.Error(), "belongs to project") {
+	if _, err := Edit(secondID, EditOptions{DependsOnIDs: &[]string{otherID}}); err == nil || !strings.Contains(err.Error(), "belongs to project") {
 		t.Fatalf("Edit(cross-project dependency) error = %v, want project mismatch", err)
 	}
 
-	second, err = Edit(int(secondID), EditOptions{ClearDependencies: true})
+	second, err = Edit(secondID, EditOptions{ClearDependencies: true})
 	if err != nil {
 		t.Fatalf("Edit(clear dependencies): %v", err)
 	}
@@ -915,12 +945,12 @@ func TestBumpChangesPriorityAndOrdering(t *testing.T) {
 		t.Fatalf("Add second ticket: %v", err)
 	}
 
-	id, priority, err := Bump(int(firstID), 0)
+	id, priority, err := Bump(firstID, 0)
 	if err != nil {
-		t.Fatalf("Bump(%d, 0): %v", firstID, err)
+		t.Fatalf("Bump(%s, 0): %v", firstID, err)
 	}
-	if id != int(firstID) || priority != 0 {
-		t.Fatalf("Bump returned (%d, %d), want (%d, 0)", id, priority, firstID)
+	if id != firstID || priority != 0 {
+		t.Fatalf("Bump returned (%s, %d), want (%s, 0)", id, priority, firstID)
 	}
 
 	got := listLines(t, "acme", false)
@@ -947,7 +977,7 @@ func TestReorderChangesSequenceWithinPriority(t *testing.T) {
 		t.Fatalf("Add third ticket: %v", err)
 	}
 
-	if err := Reorder([]int{int(thirdID), int(firstID), int(secondID)}); err != nil {
+	if err := Reorder([]string{thirdID, firstID, secondID}); err != nil {
 		t.Fatalf("Reorder: %v", err)
 	}
 
@@ -956,7 +986,7 @@ func TestReorderChangesSequenceWithinPriority(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("listLines(acme, false) after Reorder = %#v, want %#v", got, want)
 	}
-	ticket, err := Show(int(thirdID))
+	ticket, err := Show(thirdID)
 	if err != nil {
 		t.Fatalf("Show reordered ticket: %v", err)
 	}
@@ -964,7 +994,7 @@ func TestReorderChangesSequenceWithinPriority(t *testing.T) {
 		t.Fatalf("Order = 0 after Reorder, want internal order populated")
 	}
 
-	if err := Reorder([]int{99999}); err == nil {
+	if err := Reorder([]string{missingID}); err == nil {
 		t.Fatal("Reorder with unknown id: want error, got nil")
 	}
 }
@@ -982,7 +1012,7 @@ func TestReorderRejectsDuplicatesWithoutChangingSequence(t *testing.T) {
 		t.Fatalf("Add second ticket: %v", err)
 	}
 
-	err = Reorder([]int{int(secondID), int(firstID), int(firstID)})
+	err = Reorder([]string{secondID, firstID, firstID})
 	if err == nil || !strings.Contains(err.Error(), "duplicate ticket") {
 		t.Fatalf("Reorder duplicate error = %v, want duplicate ticket", err)
 	}
@@ -1007,8 +1037,8 @@ func TestReorderRejectsMissingTicketWithoutChangingSequence(t *testing.T) {
 		t.Fatalf("Add second ticket: %v", err)
 	}
 
-	err = Reorder([]int{int(secondID), 99999, int(firstID)})
-	if err == nil || !strings.Contains(err.Error(), "no such ticket: 99999") {
+	err = Reorder([]string{secondID, missingID, firstID})
+	if err == nil || !strings.Contains(err.Error(), "no such ticket: "+missingID) {
 		t.Fatalf("Reorder missing error = %v, want no such ticket", err)
 	}
 
@@ -1033,8 +1063,8 @@ func TestProjectsListsStatusCounts(t *testing.T) {
 	if _, err := Add("second acme", "body", 2, "acme", nil); err != nil {
 		t.Fatalf("Add second acme ticket: %v", err)
 	}
-	if err := Done(int(firstID)); err != nil {
-		t.Fatalf("Done(%d): %v", firstID, err)
+	if err := Done(firstID); err != nil {
+		t.Fatalf("Done(%s): %v", firstID, err)
 	}
 
 	got, err := Projects()
@@ -1077,11 +1107,11 @@ func TestRemoveDeletesOnlyWithinProject(t *testing.T) {
 		t.Fatalf("Add zen ticket: %v", err)
 	}
 
-	if err := Remove(int(acmeID), "zen"); err == nil || !strings.Contains(err.Error(), "no such ticket") {
-		t.Fatalf("Remove(%d, zen) error = %v, want no such ticket", acmeID, err)
+	if err := Remove(acmeID, "zen"); err == nil || !strings.Contains(err.Error(), "no such ticket") {
+		t.Fatalf("Remove(%s, zen) error = %v, want no such ticket", acmeID, err)
 	}
-	if err := Remove(int(acmeID), "acme"); err != nil {
-		t.Fatalf("Remove(%d, acme): %v", acmeID, err)
+	if err := Remove(acmeID, "acme"); err != nil {
+		t.Fatalf("Remove(%s, acme): %v", acmeID, err)
 	}
 
 	if got := listLines(t, "acme", true); len(got) != 0 {
@@ -1103,25 +1133,25 @@ func TestAddWithParentGroupsUnderEpic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add(epic): %v", err)
 	}
-	epic := int(epicID)
+	epic := epicID
 	childID, err := Add("child", "body", 2, "acme", &epic)
 	if err != nil {
 		t.Fatalf("Add(child): %v", err)
 	}
 
-	child, err := Show(int(childID))
+	child, err := Show(childID)
 	if err != nil {
 		t.Fatalf("Show(child): %v", err)
 	}
 	if child.ParentID == nil || *child.ParentID != epic {
-		t.Fatalf("child.ParentID = %v, want %d", child.ParentID, epic)
+		t.Fatalf("child.ParentID = %v, want %s", child.ParentID, epic)
 	}
 
 	children, err := ListTickets(ListOptions{Project: "acme", ShowAll: true, ParentID: &epic})
 	if err != nil {
 		t.Fatalf("ListTickets(ParentID): %v", err)
 	}
-	if len(children) != 1 || children[0].ID != int(childID) {
+	if len(children) != 1 || children[0].ID != childID {
 		t.Fatalf("ListTickets(ParentID) = %#v, want just the child", children)
 	}
 }
@@ -1134,7 +1164,7 @@ func TestAddRejectsAParentFromAnotherProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add(epic): %v", err)
 	}
-	epic := int(epicID)
+	epic := epicID
 	if _, err := Add("child", "body", 2, "acme", &epic); err == nil || !strings.Contains(err.Error(), "belongs to project") {
 		t.Fatalf("Add(child) error = %v, want a cross-project parent error", err)
 	}
@@ -1153,16 +1183,16 @@ func TestEditSetsAndClearsParent(t *testing.T) {
 		t.Fatalf("Add(child): %v", err)
 	}
 
-	epic := int(epicID)
-	ticket, err := Edit(int(childID), EditOptions{ParentID: &epic})
+	epic := epicID
+	ticket, err := Edit(childID, EditOptions{ParentID: &epic})
 	if err != nil {
 		t.Fatalf("Edit(set parent): %v", err)
 	}
 	if ticket.ParentID == nil || *ticket.ParentID != epic {
-		t.Fatalf("ticket.ParentID = %v, want %d", ticket.ParentID, epic)
+		t.Fatalf("ticket.ParentID = %v, want %s", ticket.ParentID, epic)
 	}
 
-	ticket, err = Edit(int(childID), EditOptions{ClearParent: true})
+	ticket, err = Edit(childID, EditOptions{ClearParent: true})
 	if err != nil {
 		t.Fatalf("Edit(clear parent): %v", err)
 	}
@@ -1179,7 +1209,7 @@ func TestEditRejectsSelfAndCyclicParents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add(first): %v", err)
 	}
-	first := int(firstID)
+	first := firstID
 	if _, err := Edit(first, EditOptions{ParentID: &first}); err == nil || !strings.Contains(err.Error(), "own parent") {
 		t.Fatalf("Edit(self parent) error = %v, want a self-parent error", err)
 	}
@@ -1188,7 +1218,7 @@ func TestEditRejectsSelfAndCyclicParents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add(second, parent=first): %v", err)
 	}
-	second := int(secondID)
+	second := secondID
 
 	if _, err := Edit(first, EditOptions{ParentID: &second}); err == nil || !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("Edit(first, parent=second) error = %v, want a cycle error", err)
@@ -1199,14 +1229,15 @@ func TestMissingTicketErrors(t *testing.T) {
 	setupTestDB(t)
 	newProjects(t, "acme")
 
-	if _, _, err := Bump(99, 1); err == nil || !strings.Contains(err.Error(), "no such ticket: 99") {
-		t.Fatalf("Bump missing ticket error = %v, want no such ticket: 99", err)
+	want := "no such ticket: " + missingID
+	if _, _, err := Bump(missingID, 1); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Bump missing ticket error = %v, want %s", err, want)
 	}
-	if err := Done(99); err == nil || !strings.Contains(err.Error(), "no such ticket: 99") {
-		t.Fatalf("Done missing ticket error = %v, want no such ticket: 99", err)
+	if err := Done(missingID); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Done missing ticket error = %v, want %s", err, want)
 	}
-	if err := Remove(99, "acme"); err == nil || !strings.Contains(err.Error(), "no such ticket: 99") {
-		t.Fatalf("Remove missing ticket error = %v, want no such ticket: 99", err)
+	if err := Remove(missingID, "acme"); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Remove missing ticket error = %v, want %s", err, want)
 	}
 }
 
@@ -1216,13 +1247,13 @@ func TestRejectAndReopen(t *testing.T) {
 	plan := Plan{Ticket: "ac-1", Concepts: []string{"auth"}}
 
 	// newTicket adds a ticket in status, with plan cached when given.
-	newTicket := func(t *testing.T, status string, plan *Plan) int {
+	newTicket := func(t *testing.T, status string, plan *Plan) string {
 		t.Helper()
 		id64, err := Add("ticket", "", 1, "acme", nil)
 		if err != nil {
 			t.Fatalf("Add: %v", err)
 		}
-		id := int(id64)
+		id := id64
 		if plan != nil {
 			if err := storePlan(db, id, *plan); err != nil {
 				t.Fatalf("storePlan: %v", err)
@@ -1236,7 +1267,7 @@ func TestRejectAndReopen(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		op         func(int, string) error
+		op         func(string, string) error
 		status     string
 		plan       *Plan
 		reason     string
@@ -1322,7 +1353,7 @@ func TestClaim(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Add: %v", err)
 			}
-			id := int(id64)
+			id := id64
 			if _, err := db.Exec(`UPDATE tickets SET status = ? WHERE id = ?`, tt.status, id); err != nil {
 				t.Fatalf("setting status: %v", err)
 			}
@@ -1333,7 +1364,7 @@ func TestClaim(t *testing.T) {
 					t.Fatalf("Claim: %v", err)
 				}
 				if claimed.ID != id || claimed.Status != "in_progress" {
-					t.Fatalf("Claim = %+v, want ticket %d in_progress", claimed, id)
+					t.Fatalf("Claim = %+v, want ticket %s in_progress", claimed, id)
 				}
 			} else if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("Claim error = %v, want it to contain %q", err, tt.wantErr)
@@ -1369,7 +1400,7 @@ func TestClaim(t *testing.T) {
 
 func TestClaimUnknownTicket(t *testing.T) {
 	setupTestDB(t)
-	if _, err := Claim(999); err == nil {
+	if _, err := Claim(missingID); err == nil {
 		t.Fatal("Claim(999) succeeded, want an error")
 	}
 }
@@ -1387,7 +1418,7 @@ func TestClaimAtCapacityLeavesTicketOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimNext: %v", err)
 	}
-	waitingID := active.ID + 1
+	waitingID := nthTicket(t, ticketNumber(t, active.ID)+1)
 
 	_, err = Claim(waitingID)
 	var full *AtCapacityError
@@ -1395,7 +1426,7 @@ func TestClaimAtCapacityLeavesTicketOpen(t *testing.T) {
 		t.Fatalf("Claim error = %v, want *AtCapacityError", err)
 	}
 	if len(full.Waiting) != 1 || full.Waiting[0].ID != active.ID {
-		t.Errorf("Waiting = %+v, want ticket %d", full.Waiting, active.ID)
+		t.Errorf("Waiting = %+v, want ticket %s", full.Waiting, active.ID)
 	}
 	ticket, err := Show(waitingID)
 	if err != nil {
@@ -1424,7 +1455,7 @@ func TestClaimConcurrentlySucceedsOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, errs[i] = Claim(int(id))
+			_, errs[i] = Claim(id)
 		}()
 	}
 	close(start)
@@ -1516,7 +1547,7 @@ func TestReviewQueue(t *testing.T) {
 		{"acme", ReviewApproved, "2026-01-02 00:00:00"},
 		{"acme", "", "2026-01-02 00:00:00"},
 	}
-	ids := make([]int, len(seed))
+	ids := make([]string, len(seed))
 	for i, s := range seed {
 		if _, err := Add(fmt.Sprintf("t%d", i), "", 1, s.project, nil); err != nil {
 			t.Fatalf("Add: %v", err)
@@ -1526,7 +1557,7 @@ func TestReviewQueue(t *testing.T) {
 			t.Fatalf("ClaimNext: %v", err)
 		}
 		ids[i] = ticket.ID
-		plan := fmt.Sprintf(`{"path":"plans/%d.md","ticket":"t","review":{"tier":1,"state":%q}}`, ticket.ID, s.state)
+		plan := fmt.Sprintf(`{"path":"plans/%s.md","ticket":"t","review":{"tier":1,"state":%q}}`, ticket.ID, s.state)
 		if _, err := db.Exec(`UPDATE tickets SET plan = ? WHERE id = ?`, plan, ticket.ID); err != nil {
 			t.Fatalf("setting plan: %v", err)
 		}
@@ -1538,10 +1569,10 @@ func TestReviewQueue(t *testing.T) {
 	tests := []struct {
 		name    string
 		project string
-		want    []int
+		want    []string
 	}{
-		{name: "every project, oldest first", project: "", want: []int{ids[1], ids[0]}},
-		{name: "one project", project: "acme", want: []int{ids[0]}},
+		{name: "every project, oldest first", project: "", want: []string{ids[1], ids[0]}},
+		{name: "one project", project: "acme", want: []string{ids[0]}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1549,11 +1580,11 @@ func TestReviewQueue(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReviewQueue: %v", err)
 			}
-			var got []int
+			var got []string
 			for _, item := range items {
 				got = append(got, item.ID)
 				if item.Plan == nil || item.Plan.Path == "" || item.Since.IsZero() {
-					t.Fatalf("item %d missing plan or since: %+v", item.ID, item)
+					t.Fatalf("item %s missing plan or since: %+v", item.ID, item)
 				}
 			}
 			if !reflect.DeepEqual(got, tt.want) {

@@ -22,12 +22,15 @@ func TestIndexPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	id := int(id64)
-	ref := FormatID("fe", id)
+	id := id64
+	ref := FormatID("fe", id, nil)
 	if err := os.MkdirAll(filepath.Join(repo, "plans"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	defaultPath := filepath.Join(repo, "plans", ref+".md")
+	if _, err := db.Exec(`UPDATE tickets SET legacy_id = 47 WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name    string
@@ -38,6 +41,8 @@ func TestIndexPlan(t *testing.T) {
 		{"unclosed", "---\nticket: " + ref + "\n", "not closed"},
 		{"extension field passes", "---\nticket: " + ref + "\ntests: [x]\n---\n", ""},
 		{"wrong ticket", "---\nticket: fe-99999\n---\n", "plan is for ticket"},
+		{"short prefix", "---\nticket: fe-" + id[:4] + "\n---\n", ""},
+		{"legacy number", "---\nticket: fe-47\n---\n", ""},
 		{"bare ticket", "---\nticket: \"" + strings.TrimPrefix(ref, "fe-") + "\"\n---\n", "plan is for ticket"},
 		{"valid", "---\nticket: " + ref + "\nconcepts: [auth]\npaths: [cmd/*.go]\ndecisions:\n  - q: which?\n    options: [a, b]\n    recommend: a\n    why: simpler\n---\nbody\n", ""},
 		{"reindex replaces", "---\nticket: " + ref + "\nconcepts: [billing]\n---\n", ""},
@@ -80,14 +85,14 @@ func TestPlanHookReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	id := int(id64)
+	id := id64
 	for _, dir := range []string{"plans", ".tix"} {
 		if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	planPath := filepath.Join(repo, "plans", FormatID("fe", id)+".md")
-	front := "---\nticket: " + FormatID("fe", id) + "\n"
+	planPath := filepath.Join(repo, "plans", FormatID("fe", id, nil)+".md")
+	front := "---\nticket: " + FormatID("fe", id, nil) + "\n"
 	hook := filepath.Join(repo, ".tix", "plan-hook")
 
 	// Steps run in order: each builds on the review state the last one left.
@@ -155,14 +160,14 @@ func TestHookExtensions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	id := int(id64)
+	id := id64
 	for _, dir := range []string{"plans", ".tix"} {
 		if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	plan := "---\nticket: " + FormatID("fe", id) + "\nacceptance: [it works]\ntests: [go test]\n---\n"
-	if err := os.WriteFile(filepath.Join(repo, "plans", FormatID("fe", id)+".md"), []byte(plan), 0o644); err != nil {
+	plan := "---\nticket: " + FormatID("fe", id, nil) + "\nacceptance: [it works]\ntests: [go test]\n---\n"
+	if err := os.WriteFile(filepath.Join(repo, "plans", FormatID("fe", id, nil)+".md"), []byte(plan), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Each hook saves its stdin and TIX_HOOK so the test can inspect them.
@@ -268,7 +273,7 @@ func TestPlanEpic(t *testing.T) {
 	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	add := func() int {
+	add := func() string {
 		id, err := Add("epic work", "", 1, "frontend", nil)
 		if err != nil {
 			t.Fatalf("Add: %v", err)
@@ -277,10 +282,10 @@ func TestPlanEpic(t *testing.T) {
 		if _, err := db.Exec(`UPDATE tickets SET status = 'in_progress' WHERE id = ?`, id); err != nil {
 			t.Fatal(err)
 		}
-		return int(id)
+		return id
 	}
 	epic, child := add(), add()
-	epicRef := FormatID("fe", epic)
+	epicRef := FormatID("fe", epic, nil)
 	if err := os.WriteFile(filepath.Join(repo, "plans", epicRef+".md"), []byte("---\nticket: "+epicRef+
 		"\nconcepts: [auth]\nnew_concepts: [billing]\ncontracts_changed: [api]\nacceptance: [it works]\n---\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -296,7 +301,7 @@ func TestPlanEpic(t *testing.T) {
 		wantInherited string
 	}{
 		{"missing epic ticket", nil, "epic: fe-999\n", "epic fe-999", 0, ""},
-		{"own ticket as epic", nil, "epic: " + FormatID("fe", child) + "\n", "its own ticket", 0, ""},
+		{"own ticket as epic", nil, "epic: " + FormatID("fe", child, nil) + "\n", "its own ticket", 0, ""},
 		{"unplanned epic", nil, "epic: " + epicRef + "\n", "no approved plan", 0, ""},
 		{"epic awaiting review", func() error {
 			_, err := IndexPlan(context.Background(), epic, "")
@@ -316,7 +321,7 @@ func TestPlanEpic(t *testing.T) {
 					t.Fatalf("setup: %v", err)
 				}
 			}
-			ref := FormatID("fe", child)
+			ref := FormatID("fe", child, nil)
 			plan := "---\nticket: " + ref + "\n" + step.front + "acceptance: [it works]\n---\n"
 			if err := os.WriteFile(filepath.Join(repo, "plans", ref+".md"), []byte(plan), 0o644); err != nil {
 				t.Fatal(err)
@@ -365,13 +370,13 @@ func TestPlanLeases(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	add := func(project, front string) int {
+	add := func(project, front string) string {
 		id64, err := Add("lease me", "", 1, project, nil)
 		if err != nil {
 			t.Fatalf("Add: %v", err)
 		}
-		id := int(id64)
-		ref := FormatID(keys[project], id)
+		id := id64
+		ref := FormatID(keys[project], id, nil)
 		plan := "---\nticket: " + ref + "\n" + front + "---\n"
 		if err := os.WriteFile(filepath.Join(repos[project], "plans", ref+".md"), []byte(plan), 0o644); err != nil {
 			t.Fatal(err)
@@ -389,15 +394,15 @@ func TestPlanLeases(t *testing.T) {
 	steps := []struct {
 		name    string
 		setup   string
-		id      int
+		id      string
 		wantErr string
 	}{
 		{"holder acquires", "", holder, ""},
 		{"holder replans its own lease", "", holder, ""},
-		{"overlap is refused", "", rival, FormatID("fe", holder)},
+		{"overlap is refused", "", rival, holder},
 		{"other project is independent", "", other, ""},
 		{"reopening releases", `UPDATE tickets SET status = 'open' WHERE id = ?`, rival, ""},
-		{"rival now holds it", `UPDATE tickets SET status = 'in_progress' WHERE id = ?`, holder, FormatID("fe", rival)},
+		{"rival now holds it", `UPDATE tickets SET status = 'in_progress' WHERE id = ?`, holder, rival},
 		{"done releases", `UPDATE tickets SET status = 'done' WHERE id = ?`, rival, ""},
 	}
 	for _, step := range steps {
@@ -411,8 +416,15 @@ func TestPlanLeases(t *testing.T) {
 			if step.wantErr == "" && err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if step.wantErr != "" && (err == nil || !strings.Contains(err.Error(), step.wantErr) || !strings.Contains(err.Error(), `"frontend"`)) {
-				t.Fatalf("error = %v, want naming %s in project frontend", err, step.wantErr)
+			if step.wantErr == "" {
+				return
+			}
+			want, refErr := RefFor("frontend", step.wantErr)
+			if refErr != nil {
+				t.Fatalf("RefFor: %v", refErr)
+			}
+			if err == nil || !strings.Contains(err.Error(), want+" ") || !strings.Contains(err.Error(), `"frontend"`) {
+				t.Fatalf("error = %v, want naming %s in project frontend", err, want)
 			}
 		})
 	}
@@ -437,9 +449,9 @@ func TestPlanLeases(t *testing.T) {
 	for _, claim := range []struct {
 		name  string
 		setup string // SQL run against the rival first
-		want  int
+		want  string
 	}{
-		{"skips overlapping plan", "", int(plain64)},
+		{"skips overlapping plan", "", plain64},
 		{"claims once released", `UPDATE tickets SET status = 'done' WHERE id = ?`, holder},
 	} {
 		t.Run(claim.name, func(t *testing.T) {
@@ -450,7 +462,7 @@ func TestPlanLeases(t *testing.T) {
 			}
 			got, err := ClaimNext("frontend")
 			if err != nil || got.ID != claim.want {
-				t.Fatalf("ClaimNext() = %d, %v; want %d", got.ID, err, claim.want)
+				t.Fatalf("ClaimNext() = %s, %v; want %s", got.ID, err, claim.want)
 			}
 		})
 	}
@@ -480,8 +492,8 @@ func TestPlanConceptRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	id := int(id64)
-	ref := FormatID("fe", id)
+	id := id64
+	ref := FormatID("fe", id, nil)
 	planPath := filepath.Join(repo, "plan.md")
 	index := func(front string) error {
 		if err := os.WriteFile(planPath, []byte("---\nticket: "+ref+"\n"+front+"---\n"), 0o644); err != nil {
@@ -531,7 +543,7 @@ func TestPlanConceptRegistry(t *testing.T) {
 		t.Fatalf("Concepts: %v", err)
 	}
 	want := []Concept{
-		{Name: "auth", Owner: "team-a", Module: "internal/auth", LeasedBy: []int{id}},
+		{Name: "auth", Owner: "team-a", Module: "internal/auth", LeasedBy: []string{id}},
 		{Name: "billing"},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -562,7 +574,7 @@ func TestListByConcept(t *testing.T) {
 	if _, err := CreateProject(Project{Name: "acme"}); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	add := func(plan string) int {
+	add := func(plan string) string {
 		id, err := Add("concept ticket", "", 1, "acme", nil)
 		if err != nil {
 			t.Fatalf("Add: %v", err)
@@ -572,7 +584,7 @@ func TestListByConcept(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		return int(id)
+		return id
 	}
 	auth := add(`{"concepts":["auth.session"],"new_concepts":["auth.token"]}`)
 	billing := add(`{"concepts":["billing"]}`)
@@ -581,12 +593,12 @@ func TestListByConcept(t *testing.T) {
 	cases := []struct {
 		name     string
 		concepts []string
-		want     map[int][]string
+		want     map[string][]string
 	}{
-		{"concepts", []string{"auth.session"}, map[int][]string{auth: {"auth.session", "auth.token"}}},
-		{"new_concepts", []string{"auth.token"}, map[int][]string{auth: {"auth.session", "auth.token"}}},
-		{"any of several", []string{"billing", "auth.session"}, map[int][]string{auth: {"auth.session", "auth.token"}, billing: {"billing"}}},
-		{"unknown", []string{"nope"}, map[int][]string{}},
+		{"concepts", []string{"auth.session"}, map[string][]string{auth: {"auth.session", "auth.token"}}},
+		{"new_concepts", []string{"auth.token"}, map[string][]string{auth: {"auth.session", "auth.token"}}},
+		{"any of several", []string{"billing", "auth.session"}, map[string][]string{auth: {"auth.session", "auth.token"}, billing: {"billing"}}},
+		{"unknown", []string{"nope"}, map[string][]string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -594,7 +606,7 @@ func TestListByConcept(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ListTickets: %v", err)
 			}
-			got := map[int][]string{}
+			got := map[string][]string{}
 			for _, ticket := range tickets {
 				got[ticket.ID] = ticket.Concepts
 			}

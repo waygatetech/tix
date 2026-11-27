@@ -78,14 +78,14 @@ func TestWebHandlerRendersEveryProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if _, err := tix.Add("deploy app", "waiting on login", 1, "acme", nil, int(login)); err != nil {
+	if _, err := tix.Add("deploy app", "waiting on login", 1, "acme", nil, login); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	epicID, err := tix.Add("release epic", "", 2, "acme", nil)
 	if err != nil {
 		t.Fatalf("Add epic: %v", err)
 	}
-	epic := int(epicID)
+	epic := epicID
 	if _, err := tix.Add("release child", "", 2, "acme", &epic); err != nil {
 		t.Fatalf("Add child: %v", err)
 	}
@@ -101,6 +101,10 @@ func TestWebHandlerRendersEveryProject(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want text/html", got)
 	}
 
+	loginRef, err := tix.RefFor("acme", login)
+	if err != nil {
+		t.Fatalf("RefFor: %v", err)
+	}
 	body := recorder.Body.String()
 	for _, want := range []string{
 		"fix login",                         // a ticket title
@@ -115,7 +119,7 @@ func TestWebHandlerRendersEveryProject(t *testing.T) {
 		"blocked",                           // every present status is shown, not just the core three
 		`data-project="acme"`,               // the project filter hooks
 		`data-project="zen"`,                // including the project with no repo path
-		"ac-1",                              // the prefixed ref, not the bare row id
+		loginRef,                            // the prefixed ref, not the bare row id
 		"/src/acme",                         // where the project's code lives
 		`data-status="open"`,                // the status filter hooks
 		`data-priority="0"`,                 // the priority filter hooks
@@ -160,8 +164,13 @@ func TestWebAPIHandlerServesTheSameView(t *testing.T) {
 	if _, err := tix.CreateProject(tix.Project{Name: "acme", Key: "ac"}); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	if _, err := tix.Add("fix login", "users cannot log in", 0, "acme", nil); err != nil {
+	id, err := tix.Add("fix login", "users cannot log in", 0, "acme", nil)
+	if err != nil {
 		t.Fatalf("Add: %v", err)
+	}
+	ref, err := tix.RefFor("acme", id)
+	if err != nil {
+		t.Fatalf("RefFor: %v", err)
 	}
 
 	recorder := get(t, webAPIHandler, "/api/dashboard")
@@ -179,8 +188,8 @@ func TestWebAPIHandlerServesTheSameView(t *testing.T) {
 	if board.Total != 1 || len(board.Projects) != 1 {
 		t.Fatalf("board = %+v, want one project with one ticket", board)
 	}
-	if board.Projects[0].Tickets[0].Ref != "ac-1" {
-		t.Fatalf("Ref = %q, want ac-1", board.Projects[0].Tickets[0].Ref)
+	if got := board.Projects[0].Tickets[0].Ref; got != ref {
+		t.Fatalf("Ref = %q, want %s", got, ref)
 	}
 }
 
@@ -287,7 +296,7 @@ func TestWebEditTicketHandlerUpdatesFields(t *testing.T) {
 	newBody := "new body"
 	newStatus := "in_progress"
 	newPriority := 2
-	recorder := do(t, mux, http.MethodPatch, fmt.Sprintf("/api/tickets/%d", id), webEditTicketRequest{
+	recorder := do(t, mux, http.MethodPatch, fmt.Sprintf("/api/tickets/%s", id), webEditTicketRequest{
 		Title:    &newTitle,
 		Body:     &newBody,
 		Status:   &newStatus,
@@ -297,7 +306,7 @@ func TestWebEditTicketHandlerUpdatesFields(t *testing.T) {
 		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
 	}
 
-	ticket, err := tix.Show(int(id))
+	ticket, err := tix.Show(id)
 	if err != nil {
 		t.Fatalf("Show: %v", err)
 	}
@@ -313,18 +322,18 @@ func TestWebEditTicketHandlerMakesTicketAChild(t *testing.T) {
 	}
 	parentID, _ := tix.Add("release", "", 1, "acme", nil)
 	childID, _ := tix.Add("build", "", 2, "acme", nil)
-	parent := int(parentID)
+	parent := parentID
 
-	recorder := do(t, webTestMux(), http.MethodPatch, fmt.Sprintf("/api/tickets/%d", childID), webEditTicketRequest{ParentID: &parent})
+	recorder := do(t, webTestMux(), http.MethodPatch, fmt.Sprintf("/api/tickets/%s", childID), webEditTicketRequest{ParentID: &parent})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
 	}
-	ticket, err := tix.Show(int(childID))
+	ticket, err := tix.Show(childID)
 	if err != nil {
 		t.Fatalf("Show: %v", err)
 	}
 	if ticket.ParentID == nil || *ticket.ParentID != parent {
-		t.Fatalf("ParentID = %v, want %d", ticket.ParentID, parent)
+		t.Fatalf("ParentID = %v, want %s", ticket.ParentID, parent)
 	}
 }
 

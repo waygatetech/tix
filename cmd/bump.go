@@ -41,7 +41,11 @@ var bumpCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s -> P%d %s\n", tix.FormatID(prefix, id), priority, ticketContext(ticket))
+		shorts, err := tix.ShortIDMap()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s -> P%d %s\n", tix.FormatID(prefix, id, shorts), priority, ticketContext(ticket))
 		return nil
 	},
 }

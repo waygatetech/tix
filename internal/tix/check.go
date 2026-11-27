@@ -37,7 +37,7 @@ func (r CheckResult) OK() bool {
 
 // Check compares the files changed since the merge base with base (committed,
 // uncommitted, and untracked) to the ticket's indexed plan.
-func Check(ctx context.Context, id int, base string) (CheckResult, error) {
+func Check(ctx context.Context, id string, base string) (CheckResult, error) {
 	ticket, err := Show(id)
 	if err != nil {
 		return CheckResult{}, err
@@ -47,7 +47,7 @@ func Check(ctx context.Context, id int, base string) (CheckResult, error) {
 		return CheckResult{}, err
 	}
 	if plan == nil {
-		return CheckResult{}, fmt.Errorf("ticket %d has no indexed plan; run tix plan first", id)
+		return CheckResult{}, fmt.Errorf("ticket %s has no indexed plan; run tix plan first", id)
 	}
 	repo, err := repoPathFor(ticket.Project)
 	if err != nil {
@@ -56,7 +56,11 @@ func Check(ctx context.Context, id int, base string) (CheckResult, error) {
 	if repo == "" {
 		return CheckResult{}, fmt.Errorf("project %q has no repo_path", ticket.Project)
 	}
-	dir := ticketDir(ctx, repo, plan.Ticket)
+	prefix, err := PrefixFor(ticket.Project)
+	if err != nil {
+		return CheckResult{}, err
+	}
+	dir := ticketDir(ctx, repo, prefix, id)
 
 	mergeBase, err := git(ctx, dir, "merge-base", "HEAD", base)
 	if err != nil {
@@ -115,16 +119,22 @@ func Check(ctx context.Context, id int, base string) (CheckResult, error) {
 // ticket's <key>-<id>.
 const worktreesDir = ".worktrees"
 
-// ticketDir is where a ticket's work lives: <repo>/.worktrees/<ref> when git
-// lists it as a worktree of repo, else repo. Anything git cannot answer, such
-// as a repo that is not a git checkout, falls back to repo.
-func ticketDir(ctx context.Context, repo, ref string) string {
+// ticketDir is where a ticket's work lives: <repo>/.worktrees/<prefix>-<hex>
+// when git lists it as a worktree of repo, else repo. Any hex prefix of id
+// counts, since the worktree may predate its short id growing. Anything git
+// cannot answer, such as a repo that is not a git checkout, falls back to repo.
+func ticketDir(ctx context.Context, repo, prefix, id string) string {
 	if repo == "" {
 		return repo
 	}
-	candidate := filepath.Join(repo, worktreesDir, ref)
-	if isWorktree(ctx, repo, candidate) {
-		return candidate
+	candidates, err := filepath.Glob(filepath.Join(repo, worktreesDir, prefix+"-*"))
+	if err != nil {
+		return repo
+	}
+	for _, candidate := range candidates {
+		if refMatchesID(filepath.Base(candidate), prefix, id) && isWorktree(ctx, repo, candidate) {
+			return candidate
+		}
 	}
 	return repo
 }

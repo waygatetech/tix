@@ -4,6 +4,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -171,8 +172,8 @@ func textResult(text string) *mcp.CallToolResult {
 }
 
 // ticketLine is the one-line form shared by list and the add replies.
-func ticketLine(id int, priority int, title string) string {
-	return fmt.Sprintf("%d [P%d] %s", id, priority, title)
+func ticketLine(id string, priority int, title string) string {
+	return fmt.Sprintf("%s [P%d] %s", id, priority, title)
 }
 
 // ticketDetail is the full form: the line, the status and project that a bare
@@ -187,13 +188,13 @@ func ticketDetail(t tix.Ticket) string {
 		ticketLine(t.ID, t.Priority, t.Title), t.Status, t.Project,
 		t.UpdatedAt.UTC().Format(time.RFC3339))
 	if t.ParentID != nil {
-		detail += fmt.Sprintf("\nparent: %d", *t.ParentID)
+		detail += fmt.Sprintf("\nparent: %s", *t.ParentID)
 	}
 	if len(t.DependsOnIDs) > 0 {
-		detail += fmt.Sprintf("\ndepends_on: %s", joinInts(t.DependsOnIDs))
+		detail += fmt.Sprintf("\ndepends_on: %s", strings.Join(t.DependsOnIDs, ", "))
 	}
 	if len(t.BlockedByIDs) > 0 {
-		detail += fmt.Sprintf("\nblocked_by: %s", joinInts(t.BlockedByIDs))
+		detail += fmt.Sprintf("\nblocked_by: %s", strings.Join(t.BlockedByIDs, ", "))
 	}
 	if t.Body != "" {
 		detail += "\n" + t.Body
@@ -201,12 +202,30 @@ func ticketDetail(t tix.Ticket) string {
 	return detail
 }
 
-func joinInts(values []int) string {
-	parts := make([]string, len(values))
-	for i, value := range values {
-		parts[i] = fmt.Sprint(value)
+// The tool schemas still take integer ids until they switch to strings, so
+// each integer is looked up as a ticket's legacy number.
+func legacyRef(n int) (string, error) {
+	return tix.ResolveRef(strconv.Itoa(n))
+}
+
+func legacyRefPtr(n *int) (*string, error) {
+	if n == nil {
+		return nil, nil
 	}
-	return strings.Join(parts, ", ")
+	id, err := legacyRef(*n)
+	return &id, err
+}
+
+func legacyRefs(ns []int) ([]string, error) {
+	ids := make([]string, len(ns))
+	for i, n := range ns {
+		id, err := legacyRef(n)
+		if err != nil {
+			return nil, err
+		}
+		ids[i] = id
+	}
+	return ids, nil
 }
 
 type addArgs struct {
@@ -231,14 +250,22 @@ func addTool(_ context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.Call
 	if err != nil {
 		return nil, nil, err
 	}
-	id, err := tix.Add(args.Title, args.Body, priority, project, args.ParentID, args.DependsOnIDs...)
+	parentID, err := legacyRefPtr(args.ParentID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parent_id: %w", err)
+	}
+	dependsOn, err := legacyRefs(args.DependsOnIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("depends_on_ids: %w", err)
+	}
+	id, err := tix.Add(args.Title, args.Body, priority, project, parentID, dependsOn...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("add failed: %w", err)
 	}
 	// The project is named even though the caller passed one: it was resolved,
 	// so this is what tells a caller who guessed at the spelling where the
 	// ticket actually landed.
-	return textResult(fmt.Sprintf("%s (%s)", ticketLine(int(id), priority, args.Title), project)), nil, nil
+	return textResult(fmt.Sprintf("%s (%s)", ticketLine(id, priority, args.Title), project)), nil, nil
 }
 
 // normalizePriority defaults a missing priority and clamps an out-of-range one
@@ -309,15 +336,21 @@ func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) 
 	}
 
 	lines := make([]string, 0, len(args.Tickets))
-	ids := make([]int, 0, len(args.Tickets))
+	ids := make([]string, 0, len(args.Tickets))
 	for i, ticket := range args.Tickets {
 		priority := normalizePriority(ticket.Priority)
-		parentID := ticket.ParentID
+		parentID, err := legacyRefPtr(ticket.ParentID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("tickets[%d].parent_id: %w", i, err)
+		}
 		if ticket.ParentIndex != nil {
 			parent := ids[*ticket.ParentIndex]
 			parentID = &parent
 		}
-		dependsOn := append([]int(nil), ticket.DependsOnIDs...)
+		dependsOn, err := legacyRefs(ticket.DependsOnIDs)
+		if err != nil {
+			return nil, nil, fmt.Errorf("tickets[%d].depends_on_ids: %w", i, err)
+		}
 		for _, dep := range ticket.DependsOnIndexes {
 			dependsOn = append(dependsOn, ids[dep])
 		}
@@ -329,8 +362,8 @@ func addBatchTool(_ context.Context, _ *mcp.CallToolRequest, args addBatchArgs) 
 			return nil, nil, fmt.Errorf("add failed for tickets[%d] (%d of %d already created: %s): %w",
 				i, len(lines), len(args.Tickets), strings.Join(lines, "; "), err)
 		}
-		ids = append(ids, int(id))
-		lines = append(lines, ticketLine(int(id), priority, ticket.Title))
+		ids = append(ids, id)
+		lines = append(lines, ticketLine(id, priority, ticket.Title))
 	}
 	return textResult(fmt.Sprintf("created %d in %s\n%s", len(lines), project, strings.Join(lines, "\n"))), nil, nil
 }
@@ -351,13 +384,17 @@ func listTool(_ context.Context, _ *mcp.CallToolRequest, args listArgs) (*mcp.Ca
 	if args.Limit < 0 {
 		return nil, nil, fmt.Errorf("limit must be >= 0")
 	}
+	parentID, err := legacyRefPtr(args.ParentID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parent_id: %w", err)
+	}
 	tickets, err := tix.ListTickets(tix.ListOptions{
 		Project:  args.Project,
 		ShowAll:  args.All,
 		Status:   args.Status,
 		Priority: args.Priority,
 		Limit:    args.Limit,
-		ParentID: args.ParentID,
+		ParentID: parentID,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("list failed: %w", err)
@@ -430,11 +467,15 @@ type showArgs struct {
 }
 
 func showTool(_ context.Context, _ *mcp.CallToolRequest, args showArgs) (*mcp.CallToolResult, any, error) {
-	ticket, err := tix.Show(args.ID)
+	id, err := legacyRef(args.ID)
 	if err != nil {
 		return nil, nil, err
 	}
-	notes, err := tix.Notes(args.ID)
+	ticket, err := tix.Show(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	notes, err := tix.Notes(id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -454,7 +495,11 @@ type noteArgs struct {
 }
 
 func noteTool(_ context.Context, _ *mcp.CallToolRequest, args noteArgs) (*mcp.CallToolResult, any, error) {
-	if err := tix.Note(args.ID, args.Body); err != nil {
+	id, err := legacyRef(args.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("note failed: %w", err)
+	}
+	if err := tix.Note(id, args.Body); err != nil {
 		return nil, nil, fmt.Errorf("note failed: %w", err)
 	}
 	return textResult(fmt.Sprintf("noted %d", args.ID)), nil, nil
@@ -480,15 +525,31 @@ func editTool(_ context.Context, _ *mcp.CallToolRequest, args editArgs) (*mcp.Ca
 	if args.DependsOnIDs != nil && args.ClearDependencies {
 		return nil, nil, fmt.Errorf("use either depends_on_ids or clear_dependencies, not both")
 	}
-	ticket, err := tix.Edit(args.ID, tix.EditOptions{
+	id, err := legacyRef(args.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("edit failed: %w", err)
+	}
+	parentID, err := legacyRefPtr(args.ParentID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parent_id: %w", err)
+	}
+	var dependsOn *[]string
+	if args.DependsOnIDs != nil {
+		ids, err := legacyRefs(*args.DependsOnIDs)
+		if err != nil {
+			return nil, nil, fmt.Errorf("depends_on_ids: %w", err)
+		}
+		dependsOn = &ids
+	}
+	ticket, err := tix.Edit(id, tix.EditOptions{
 		Title:             args.Title,
 		Body:              args.Body,
 		Status:            args.Status,
 		Priority:          args.Priority,
 		Project:           args.Project,
-		ParentID:          args.ParentID,
+		ParentID:          parentID,
 		ClearParent:       args.ClearParent,
-		DependsOnIDs:      args.DependsOnIDs,
+		DependsOnIDs:      dependsOn,
 		ClearDependencies: args.ClearDependencies,
 	})
 	if err != nil {
@@ -504,10 +565,14 @@ type reorderArgs struct {
 }
 
 func reorderTool(_ context.Context, _ *mcp.CallToolRequest, args reorderArgs) (*mcp.CallToolResult, any, error) {
-	if err := tix.Reorder(args.IDs); err != nil {
+	ids, err := legacyRefs(args.IDs)
+	if err != nil {
 		return nil, nil, fmt.Errorf("reorder failed: %w", err)
 	}
-	return textResult("reordered: " + strings.Replace(joinInts(args.IDs), ", ", " -> ", -1)), nil, nil
+	if err := tix.Reorder(ids); err != nil {
+		return nil, nil, fmt.Errorf("reorder failed: %w", err)
+	}
+	return textResult("reordered: " + strings.Join(ids, " -> ")), nil, nil
 }
 
 func projectsTool(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {

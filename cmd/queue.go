@@ -28,10 +28,14 @@ var queueCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		shorts, err := tix.ShortIDMap()
+		if err != nil {
+			return err
+		}
 		now := time.Now()
 		for _, item := range items {
 			fmt.Printf("%s [tier %d] %s (%s, waiting %s)\n",
-				tix.FormatID(prefixes[item.Project], item.ID), item.Plan.Review.Tier, item.Title,
+				tix.FormatID(prefixes[item.Project], item.ID, shorts), item.Plan.Review.Tier, item.Title,
 				item.Project, tix.FormatAge(now.Sub(item.Since)))
 			fmt.Printf("  plan: %s\n", item.Plan.Path)
 		}

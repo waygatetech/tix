@@ -109,8 +109,12 @@ var editCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		shorts, err := tix.ShortIDMap()
+		if err != nil {
+			return err
+		}
 		fmt.Printf("%s [P%d] %s (%s, %s)\n",
-			tix.FormatID(prefix, ticket.ID), ticket.Priority, ticket.Title, ticket.Status, ticket.Project)
+			tix.FormatID(prefix, ticket.ID, shorts), ticket.Priority, ticket.Title, ticket.Status, ticket.Project)
 		if before.Project != ticket.Project {
 			fmt.Printf("moved from %s to %s\n", before.Project, ticket.Project)
 		}

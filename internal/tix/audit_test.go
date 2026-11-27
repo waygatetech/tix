@@ -45,7 +45,7 @@ func TestAuditRecordsReverts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Add: %v", err)
 			}
-			id := int(id64)
+			id := id64
 
 			if err := os.WriteFile(filepath.Join(repo, "f"), []byte("x"), 0o644); err != nil {
 				t.Fatal(err)
@@ -82,7 +82,7 @@ func TestAuditRecordsReverts(t *testing.T) {
 					t.Fatalf("Audit pass %d recorded %v, want %d", pass, reverts, want)
 				}
 				if want == 1 && (reverts[0].TicketID != id || reverts[0].SHA != sha || reverts[0].RevertSHA != run("rev-parse", "HEAD")) {
-					t.Fatalf("Audit recorded %+v, want ticket %d commit %s reverted by HEAD", reverts[0], id, sha)
+					t.Fatalf("Audit recorded %+v, want ticket %s commit %s reverted by HEAD", reverts[0], id, sha)
 				}
 			}
 

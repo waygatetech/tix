@@ -292,12 +292,11 @@ var migrations = []string{
 	// max_active caps a project's in_progress tickets at what its human can
 	// review; 0 leaves only the global TIX_MAX_ACTIVE cap.
 	`ALTER TABLE projects ADD COLUMN max_active INTEGER NOT NULL DEFAULT 0;`,
+	uuidMigration,
 }
 
 // uuidMigration replaces integer ticket ids with UUIDv4 strings, keeping each
-// old number in tickets.legacy_id. It is not in migrations yet: code that
-// scans ids as int cannot read the result, so it is appended once tickets
-// carry string ids (ti-1034).
+// old number in tickets.legacy_id.
 //
 // Every integer id found anywhere maps to one UUID, including ids of removed
 // tickets whose events and jev rows remain, so that history still groups by

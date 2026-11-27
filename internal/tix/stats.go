@@ -60,12 +60,12 @@ type StatsGroup struct {
 	AwaitingReviewHours float64        `json:"awaiting_review_hours"`
 	QueueDepth          *int           `json:"queue_depth,omitempty"`
 
-	tickets map[int]bool
+	tickets map[string]bool
 	cycles  []float64
 }
 
 type statsEvent struct {
-	ticketID int
+	ticketID string
 	event    string
 	at       time.Time
 	data     []byte
@@ -109,7 +109,7 @@ func BuildStats(q StatsQuery) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
-	var concepts map[int][]string
+	var concepts map[string][]string
 	if q.By == StatsByConcept {
 		if concepts, err = loadStatsConcepts(q.Project); err != nil {
 			return Stats{}, err
@@ -118,7 +118,7 @@ func BuildStats(q StatsQuery) (Stats, error) {
 
 	// Tier is the latest plan's, so every event of a ticket lands in one tier.
 	// Plans that rode on an epic's approval get their own row.
-	states := map[int]*statsTicket{}
+	states := map[string]*statsTicket{}
 	for _, e := range events {
 		if states[e.ticketID] == nil {
 			states[e.ticketID] = &statsTicket{tier: "none"}
@@ -214,7 +214,7 @@ func BuildStats(q StatsQuery) (Stats, error) {
 }
 
 func newStatsGroup(key string) *StatsGroup {
-	return &StatsGroup{Key: key, tickets: map[int]bool{}}
+	return &StatsGroup{Key: key, tickets: map[string]bool{}}
 }
 
 // add counts one in-window event. cycle and awaited are hours, or -1 when the
@@ -270,7 +270,7 @@ func (g *StatsGroup) add(e statsEvent, st *statsTicket, cycle, awaited float64) 
 	}
 }
 
-func (g *StatsGroup) finish(states map[int]*statsTicket) StatsGroup {
+func (g *StatsGroup) finish(states map[string]*statsTicket) StatsGroup {
 	g.Tickets = len(g.tickets)
 	for id := range g.tickets {
 		if g.Tiers == nil {
@@ -320,7 +320,7 @@ func mustParseWeek(key string) time.Time {
 }
 
 // queueDepth counts tickets waiting on a human review at instant at.
-func queueDepth(states map[int]*statsTicket, at time.Time) int {
+func queueDepth(states map[string]*statsTicket, at time.Time) int {
 	n := 0
 	for _, st := range states {
 		waits := st.awaiting
@@ -368,16 +368,16 @@ func loadStatsEvents(project string) ([]statsEvent, error) {
 // loadStatsConcepts maps tickets to the concepts their current plan declares.
 // ponytail: a reopened ticket's plan is cleared, so it groups as (none) until
 // replanned; record concepts on plan events if that skews the numbers.
-func loadStatsConcepts(project string) (map[int][]string, error) {
+func loadStatsConcepts(project string) (map[string][]string, error) {
 	rows, err := db.Query(`SELECT tickets.id, c.value FROM tickets, `+planConcepts+`
 		WHERE (? = '' OR tickets.project = ?) AND c.type = 'text' ORDER BY tickets.created_at, tickets.id, p.column1, c.key`, project, project)
 	if err != nil {
 		return nil, fmt.Errorf("loading plan concepts: %w", err)
 	}
 	defer rows.Close()
-	concepts := map[int][]string{}
+	concepts := map[string][]string{}
 	for rows.Next() {
-		var id int
+		var id string
 		var concept string
 		if err := rows.Scan(&id, &concept); err != nil {
 			return nil, fmt.Errorf("loading plan concepts: %w", err)

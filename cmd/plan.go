@@ -108,8 +108,12 @@ is in_progress, so done, rm, and returning the ticket to open release it.`,
 		if err != nil {
 			return err
 		}
+		shorts, err := tix.ShortIDMap()
+		if err != nil {
+			return err
+		}
 		for _, lease := range leases {
-			fmt.Printf("%s %s\n", lease.Concept, tix.FormatID(prefixes[lease.Project], lease.TicketID))
+			fmt.Printf("%s %s\n", lease.Concept, tix.FormatID(prefixes[lease.Project], lease.TicketID, shorts))
 		}
 		return nil
 	},
@@ -146,6 +150,10 @@ it in new_concepts. Without a concepts.yaml, validation is skipped.`,
 		if err != nil {
 			return err
 		}
+		shorts, err := tix.ShortIDMap()
+		if err != nil {
+			return err
+		}
 		resolved, err := tix.ResolveProject(scope)
 		if err != nil {
 			return err
@@ -159,7 +167,7 @@ it in new_concepts. Without a concepts.yaml, validation is skipped.`,
 				line += " module=" + c.Module
 			}
 			for _, id := range c.LeasedBy {
-				line += " leased_by=" + tix.FormatID(prefixes[resolved], id)
+				line += " leased_by=" + tix.FormatID(prefixes[resolved], id, shorts)
 			}
 			fmt.Println(line)
 		}

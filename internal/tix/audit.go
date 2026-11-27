@@ -15,7 +15,7 @@ const DefaultAuditDays = 14
 // Revert is a reverted event audit recorded: SHA is the ticket's commit and
 // RevertSHA the commit that undid it.
 type Revert struct {
-	TicketID  int    `json:"ticket_id"`
+	TicketID  string `json:"ticket_id"`
 	Project   string `json:"project"`
 	SHA       string `json:"sha"`
 	RevertSHA string `json:"revert_sha"`
@@ -113,7 +113,7 @@ func auditProject(ctx context.Context, p Project, days int) ([]Revert, error) {
 }
 
 type recordedDone struct {
-	ticketID int
+	ticketID string
 	commit   doneCommit
 }
 
@@ -137,7 +137,7 @@ func doneCommits(project string) ([]recordedDone, error) {
 			return nil, fmt.Errorf("scanning done event: %w", err)
 		}
 		if err := json.Unmarshal([]byte(data), &d.commit); err != nil {
-			return nil, fmt.Errorf("parsing done event for ticket %d: %w", d.ticketID, err)
+			return nil, fmt.Errorf("parsing done event for ticket %s: %w", d.ticketID, err)
 		}
 		if d.commit.SHA != "" {
 			dones = append(dones, d)
@@ -147,7 +147,7 @@ func doneCommits(project string) ([]recordedDone, error) {
 }
 
 type revertKey struct {
-	ticketID  int
+	ticketID  string
 	revertSHA string
 }
 

@@ -8,12 +8,10 @@ import (
 	"strings"
 )
 
-// Ticket IDs are integers in the database and in every JSON payload. The
-// prefixed form (fe-47) exists only at the edges: it is what humans read in
-// list/show output and what they may type back in. Keeping the integer
-// canonical means the MCP tool schemas, the --json output, and the primary key
-// are all untouched by prefixes, so agents that already speak integer ids keep
-// working.
+// Ticket IDs are UUIDv4 strings in the database and in JSON. The prefixed
+// short form (fe-a3f9) exists only at the edges: it is what humans read in
+// list/show output and what they may type back in. Tickets created before
+// UUIDs keep their old number in legacy_id, and it still resolves.
 //
 // A project's prefix is derived from its name rather than stored, so a
 // database needs no backfill to start showing prefixes. Derivation is a pure
@@ -197,67 +195,61 @@ func SetPrefix(project, prefix string) error {
 	return err
 }
 
-// FormatID renders a ticket ID the way humans read it.
-func FormatID(prefix string, id int) string {
-	if prefix == "" {
-		return strconv.Itoa(id)
+// FormatID renders a ticket ID the way humans read it: the project key and the
+// id's entry in shorts (see ShortIDMap), or the whole id when shorts lacks it.
+func FormatID(prefix, id string, shorts map[string]string) string {
+	if short, ok := shorts[id]; ok {
+		id = short
 	}
-	return fmt.Sprintf("%s-%d", prefix, id)
+	if prefix == "" {
+		return id
+	}
+	return prefix + "-" + id
 }
 
-// ParseRef splits a ticket reference into its numeric id and optional prefix.
-// Both "47" and "fe-47" are accepted; the prefix, when present, is returned for
-// the caller to verify against the ticket's actual project.
-func ParseRef(ref string) (id int, prefix string, err error) {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return 0, "", fmt.Errorf("invalid id: %s", ref)
+// ShortIDMap maps every ticket id in the database to its displayed short form.
+func ShortIDMap() (map[string]string, error) {
+	rows, err := db.Query(`SELECT id FROM tickets`)
+	if err != nil {
+		return nil, fmt.Errorf("listing ticket ids: %w", err)
 	}
-	// Leading '#' is how list output used to render ids, so accept it rather
-	// than making users strip it out of copied text.
-	trimmed := strings.TrimPrefix(ref, "#")
-	if i := strings.LastIndex(trimmed, "-"); i >= 0 {
-		prefix = trimmed[:i]
-		trimmed = trimmed[i+1:]
-		if prefix == "" {
-			return 0, "", fmt.Errorf("invalid id: %s", ref)
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("listing ticket ids: %w", err)
 		}
+		ids = append(ids, id)
 	}
-	id, convErr := strconv.Atoi(trimmed)
-	if convErr != nil || id <= 0 {
-		return 0, "", fmt.Errorf("invalid id: %s", ref)
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing ticket ids: %w", err)
 	}
-	return id, prefix, nil
+	return ShortIDs(ids), nil
 }
 
-// ResolveRef turns a user-supplied reference into a ticket ID, rejecting a
-// prefix that names a different project than the ticket actually belongs to.
-// That check is the point of prefixes: "tix done fe-47" cannot silently close a
-// backend ticket that happens to be numbered 47.
-func ResolveRef(ref string) (int, error) {
-	id, prefix, err := ParseRef(ref)
+// RefFor renders one ticket's displayed ID. Callers formatting many tickets
+// should load ShortIDMap once and use FormatID instead.
+func RefFor(project, id string) (string, error) {
+	prefix, err := PrefixFor(project)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
-	if prefix == "" {
-		return id, nil
+	shorts, err := ShortIDMap()
+	if err != nil {
+		return "", err
 	}
+	return FormatID(prefix, id, shorts), nil
+}
 
-	var project string
-	if err := db.QueryRow(`SELECT project FROM tickets WHERE id = ?`, id).Scan(&project); err != nil {
-		return 0, noSuchTicket(ref)
-	}
-	actual, err := PrefixFor(project)
-	if err != nil {
-		return 0, err
-	}
-	if actual != prefix {
-		return 0, fmt.Errorf(
-			"ticket %d belongs to project %q (%s-%d), not %q",
-			id, project, actual, id, prefix,
-		)
-	}
-	return id, nil
+// refMatchesID reports whether a name written as <key>-<hex> earlier, such
+// as a worktree or plan file, still names id: short ids grow as tickets are
+// added, so any hex prefix of the id counts.
+func refMatchesID(name, prefix, id string) bool {
+	hex, ok := strings.CutPrefix(name, prefix+"-")
+	hex = strings.ToLower(strings.ReplaceAll(hex, "-", ""))
+	return ok && len(hex) >= minShortID && isHex(hex) &&
+		strings.HasPrefix(strings.ReplaceAll(id, "-", ""), hex)
 }
 
 // minShortID is the fewest hex characters a displayed ticket id uses.
@@ -319,12 +311,13 @@ func isDigits(s string) bool {
 	return s != ""
 }
 
-// resolveUUIDRef is ResolveRef for UUID ticket ids. It accepts
+// ResolveRef turns a user-supplied reference into a ticket ID. It accepts
 // "[key-]<hex prefix>", "[key-]<full uuid>", or "[key-]<legacy number>".
 // All-digit input is checked as both a legacy number and a hex prefix, and
-// matching two tickets is an error like any other ambiguous prefix. It is
-// unwired until callers carry string ids (ti-1034).
-func resolveUUIDRef(ref string) (string, error) {
+// matching two tickets is an error like any other ambiguous prefix. A key
+// naming a different project than the ticket's is rejected: "tix done fe-a3f9"
+// cannot silently close a backend ticket.
+func ResolveRef(ref string) (string, error) {
 	trimmed := strings.TrimPrefix(strings.TrimSpace(ref), "#")
 	body, key := trimmed, ""
 	if loc := uuidPattern.FindStringIndex(trimmed); loc != nil {

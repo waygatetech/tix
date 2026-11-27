@@ -30,9 +30,13 @@ func requireProjectMatch(ticket tix.Ticket, named string) error {
 	if err != nil {
 		return err
 	}
+	shorts, err := tix.ShortIDMap()
+	if err != nil {
+		return err
+	}
 	return fmt.Errorf(
-		"ticket %d belongs to project %q (%s), not %q",
-		ticket.ID, ticket.Project, tix.FormatID(prefix, ticket.ID), want,
+		"ticket %s belongs to project %q (%s), not %q",
+		ticket.ID, ticket.Project, tix.FormatID(prefix, ticket.ID, shorts), want,
 	)
 }
 

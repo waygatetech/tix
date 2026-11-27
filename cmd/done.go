@@ -46,7 +46,11 @@ output names the failing stage.`,
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s done %s\n", tix.FormatID(prefix, id), ticketContext(ticket))
+		shorts, err := tix.ShortIDMap()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s done %s\n", tix.FormatID(prefix, id, shorts), ticketContext(ticket))
 		return nil
 	},
 }
